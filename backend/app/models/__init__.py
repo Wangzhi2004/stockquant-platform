@@ -9,3 +9,5 @@ from app.models.backtest import BacktestJob
 from app.models.push import PushConfig, PushLog
 
 User.portfolios = []
+Portfolio.holdings = []
+Portfolio.transactions = []
