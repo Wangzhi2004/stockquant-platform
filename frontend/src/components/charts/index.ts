@@ -1,2 +1,5 @@
 export { KlineChart } from './KlineChart'
 export { PortfolioChart } from './PortfolioChart'
+export { Sparkline } from './Sparkline'
+export { DonutChart } from './DonutChart'
+export { HeatmapChart } from './HeatmapChart'

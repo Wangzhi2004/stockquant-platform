@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { cn } from '@/utils/formatters'
 import {
@@ -11,6 +11,11 @@ import {
   Zap,
   Layers,
   History,
+  Search,
+  ChevronDown,
+  User,
+  LogOut,
+  Moon,
 } from 'lucide-react'
 
 const navItems = [
@@ -26,6 +31,7 @@ const navItems = [
 
 export const Navbar: React.FC = () => {
   const location = useLocation()
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
 
   return (
     <nav className="h-16 glass-card rounded-none border-x-0 border-t-0 flex items-center justify-between px-6 z-50">
@@ -60,13 +66,51 @@ export const Navbar: React.FC = () => {
         </div>
       </div>
 
-      <div className="flex items-center gap-3">
-        <button className="relative p-2 rounded-glass-sm text-text-secondary hover:text-text-primary hover:bg-glass-bg-hover transition-all">
-          <Bell className="w-5 h-5" />
-          <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-down rounded-full" />
+      <div className="flex items-center gap-2">
+        <button className="p-2 rounded-glass-sm text-text-tertiary hover:text-text-primary hover:bg-glass-bg-hover transition-all">
+          <Search className="w-4 h-4" />
         </button>
-        <div className="w-8 h-8 rounded-full bg-accent/20 flex items-center justify-center text-accent text-sm font-medium">
-          U
+
+        <button className="relative p-2 rounded-glass-sm text-text-tertiary hover:text-text-primary hover:bg-glass-bg-hover transition-all">
+          <Bell className="w-4 h-4" />
+          <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-down rounded-full shadow-[0_0_6px_rgba(255,69,103,0.5)]" />
+        </button>
+
+        <div className="relative">
+          <button
+            className={cn(
+              'flex items-center gap-2 p-1.5 pr-2 rounded-glass-sm transition-all',
+              userMenuOpen ? 'bg-glass-bg-hover' : 'hover:bg-glass-bg-hover'
+            )}
+            onClick={() => setUserMenuOpen(!userMenuOpen)}
+          >
+            <div className="w-7 h-7 rounded-full bg-accent/20 flex items-center justify-center text-accent text-xs font-medium">
+              U
+            </div>
+            <ChevronDown className={cn('w-3 h-3 text-text-tertiary transition-transform', userMenuOpen && 'rotate-180')} />
+          </button>
+
+          {userMenuOpen && (
+            <div className="absolute right-0 top-full mt-1 glass-dropdown p-1 min-w-[160px] z-50 animate-slide-down">
+              <div className="glass-dropdown-item flex items-center gap-2 text-sm text-text-primary">
+                <User className="w-4 h-4 text-text-tertiary" />
+                个人中心
+              </div>
+              <div className="glass-dropdown-item flex items-center gap-2 text-sm text-text-primary">
+                <Moon className="w-4 h-4 text-text-tertiary" />
+                深色模式
+              </div>
+              <div className="glass-dropdown-item flex items-center gap-2 text-sm text-text-primary">
+                <Settings className="w-4 h-4 text-text-tertiary" />
+                设置
+              </div>
+              <div className="my-1 border-t border-white/[0.04]" />
+              <div className="glass-dropdown-item flex items-center gap-2 text-sm text-down">
+                <LogOut className="w-4 h-4" />
+                退出登录
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </nav>

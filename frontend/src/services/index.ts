@@ -1,1 +1,8 @@
-// Services exports
+export { authService } from './auth'
+export { portfolioService } from './portfolio'
+export { marketService } from './market'
+export { newsService } from './news'
+export { signalsService } from './signals'
+export { strategiesService } from './strategies'
+export { backtestService } from './backtest'
+export { pushService } from './push'

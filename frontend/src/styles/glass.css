@@ -1,0 +1,192 @@
+@keyframes glass-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes glow-breathe {
+  0%, 100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes rotate-gradient {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.glass-shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.03) 25%,
+    rgba(255, 255, 255, 0.06) 50%,
+    rgba(255, 255, 255, 0.03) 75%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: glass-shimmer 2s linear infinite;
+}
+
+.glass-glow-up {
+  box-shadow: 0 0 20px rgba(0, 229, 160, 0.1), 0 0 40px rgba(0, 229, 160, 0.05), inset 0 1px 0 rgba(0, 229, 160, 0.1);
+}
+
+.glass-glow-down {
+  box-shadow: 0 0 20px rgba(255, 69, 103, 0.1), 0 0 40px rgba(255, 69, 103, 0.05), inset 0 1px 0 rgba(255, 69, 103, 0.1);
+}
+
+.glass-glow-accent {
+  box-shadow: 0 0 20px rgba(91, 141, 239, 0.1), 0 0 40px rgba(91, 141, 239, 0.05), inset 0 1px 0 rgba(91, 141, 239, 0.1);
+}
+
+.glass-border-glow-up {
+  border-color: rgba(0, 229, 160, 0.25);
+}
+
+.glass-border-glow-down {
+  border-color: rgba(255, 69, 103, 0.25);
+}
+
+.glass-border-glow-accent {
+  border-color: rgba(91, 141, 239, 0.25);
+}
+
+.glass-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 7, 10, 0.7);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.glass-input-focus:focus {
+  border-color: rgba(91, 141, 239, 0.5);
+  box-shadow: 0 0 0 2px rgba(91, 141, 239, 0.1);
+}
+
+.glass-input-error {
+  border-color: rgba(255, 69, 103, 0.5) !important;
+  box-shadow: 0 0 0 2px rgba(255, 69, 103, 0.1) !important;
+}
+
+.glass-tab-indicator {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-row-hover:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.glass-row-selected {
+  background: rgba(91, 141, 239, 0.08);
+}
+
+.glass-toast-enter {
+  animation: toast-enter 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-toast-exit {
+  animation: toast-exit 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes toast-enter {
+  0% {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes toast-exit {
+  0% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+}
+
+.glass-spinner {
+  border: 2px solid rgba(255, 255, 255, 0.08);
+  border-top-color: #5b8def;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.glass-skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.03) 0%,
+    rgba(255, 255, 255, 0.06) 50%,
+    rgba(255, 255, 255, 0.03) 100%
+  );
+  background-size: 200% 100%;
+  animation: glass-shimmer 2s linear infinite;
+  border-radius: 8px;
+}
+
+.glass-sidebar-collapsed {
+  width: 64px;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-sidebar-expanded {
+  width: 280px;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-dropdown {
+  background: rgba(15, 20, 35, 0.95);
+  backdrop-filter: blur(24px) saturate(1.8);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.glass-dropdown-item {
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-dropdown-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.glass-dropdown-item-active {
+  background: rgba(91, 141, 239, 0.12);
+  color: #5b8def;
+}

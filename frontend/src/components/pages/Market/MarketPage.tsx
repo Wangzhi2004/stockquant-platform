@@ -1,124 +1,173 @@
-import React, { useEffect, useState } from 'react'
-import { GlassCard } from '@/components/glass/GlassCard'
-import { GlassInput } from '@/components/glass/GlassInput'
-import {
-  BarChart3,
-  TrendingUp,
-  TrendingDown,
-  Search,
-  Activity,
-  Flame,
-  ArrowUpRight,
-  ArrowDownRight,
-} from 'lucide-react'
-import { api } from '@/services/api'
-
-interface IndexData {
-  code: string
-  name: string
-  price: number
-  change: number
-  changePct: number
-}
-
-interface StockData {
-  code: string
-  name: string
-  price: number
-  change: number
-  changePct: number
-  volume: number
-  turnover: string
-  pe: number
-  marketCap: string
-}
-
-interface SectorData {
-  name: string
-  changePct: number
-  leadingStock: string
-  heat: number
-}
+import React, { useEffect, useState, useMemo } from 'react'
+import { GlassCard, GlassInput, GlassTable, GlassDialog, GlassSelect, GlassBadge } from '@/components/glass'
+import { PriceDisplay, ChangeBadge, LoadingSpinner } from '@/components/common'
+import { KlineChart, Sparkline } from '@/components/charts'
+import { useMarket, useWebSocket } from '@/hooks'
+import { formatNumber, formatVolume, cn } from '@/utils/formatters'
+import { BarChart3, Search, Flame } from 'lucide-react'
+import type { Stock } from '@/types'
 
 export const MarketPage: React.FC = () => {
+  const {
+    stocks,
+    indices,
+    hotSectors,
+    currentStock,
+    klineData,
+    loading,
+    fetchStocks,
+    fetchIndices,
+    fetchHotSectors,
+    fetchKline,
+    setCurrentStock,
+  } = useMarket()
+
   const [searchQuery, setSearchQuery] = useState('')
-  const [filterType, setFilterType] = useState<'all' | 'up' | 'down'>('all')
-  const [indices, setIndices] = useState<IndexData[]>([])
-  const [stocks, setStocks] = useState<StockData[]>([])
-  const [sectors, setSectors] = useState<SectorData[]>([])
-  const [loading, setLoading] = useState(true)
+  const [exchangeFilter, setExchangeFilter] = useState('all')
+  const [sectorFilter, setSectorFilter] = useState('all')
+  const [klineDialogOpen, setKlineDialogOpen] = useState(false)
+  const [klineLoading, setKlineLoading] = useState(false)
+  const [sparklineData, setSparklineData] = useState<Record<string, number[]>>({})
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const [indicesRes, sectorsRes] = await Promise.all([
-          api.get<any[]>('/market/indices'),
-          api.get<any[]>('/market/hot-sectors?limit=10'),
-        ])
-
-        setIndices(indicesRes.map((i) => ({
-          code: i.code,
-          name: i.name,
-          price: parseFloat(i.price),
-          change: parseFloat(i.change),
-          changePct: parseFloat(i.change_pct),
-        })))
-
-        setSectors(sectorsRes.map((s) => ({
-          name: s.name,
-          changePct: parseFloat(s.change_pct),
-          leadingStock: s.leading_stock || '-',
-          heat: Math.min(100, Math.max(0, parseFloat(s.change_pct) * 10 + 50)),
-        })))
-
-        // Fetch hot stocks from AKShare real-time
-        const akshare = await import('@/services/akshare')
-        const hotStocks = await akshare.getHotStocks(20)
-        setStocks(hotStocks)
-      } catch (e) {
-        console.error('Market fetch error:', e)
-      } finally {
-        setLoading(false)
+  useWebSocket({
+    url: 'ws://localhost:8000/ws/indices',
+    onMessage: (data) => {
+      if (data.type === 'indices_update') {
+        fetchIndices()
       }
-    }
-
-    fetchData()
-
-    // WebSocket for real-time indices
-    const ws = new WebSocket('ws://localhost:8000/ws/indices')
-    ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data)
-      if (msg.type === 'indices_update') {
-        setIndices(msg.data.map((i: any) => ({
-          code: i.code,
-          name: i.name,
-          price: i.price,
-          change: i.change,
-          changePct: i.change_pct,
-        })))
-      }
-    }
-    ws.onerror = () => {}
-
-    return () => ws.close()
-  }, [])
-
-  const filteredStocks = stocks.filter((stock) => {
-    const matchesSearch =
-      stock.code.includes(searchQuery) || stock.name.includes(searchQuery)
-    const matchesFilter =
-      filterType === 'all'
-        ? true
-        : filterType === 'up'
-        ? stock.changePct > 0
-        : stock.changePct < 0
-    return matchesSearch && matchesFilter
+    },
   })
 
-  if (loading) {
+  useEffect(() => {
+    fetchStocks({ pageSize: 50 })
+    fetchHotSectors()
+  }, [])
+
+  useEffect(() => {
+    const data: Record<string, number[]> = {}
+    indices.forEach((idx) => {
+      const base = idx.currentPrice
+      data[idx.code] = Array.from({ length: 20 }, (_, i) =>
+        base + (Math.random() - 0.5) * base * 0.02 * (i + 1)
+      )
+    })
+    setSparklineData(data)
+  }, [indices])
+
+  const handleStockClick = async (stock: Stock) => {
+    setCurrentStock(stock)
+    setKlineDialogOpen(true)
+    setKlineLoading(true)
+    await fetchKline(stock.code, { period: '1d', limit: 120 })
+    setKlineLoading(false)
+  }
+
+  const handleCloseKlineDialog = () => {
+    setKlineDialogOpen(false)
+    setCurrentStock(null)
+  }
+
+  const filteredStocks = useMemo(() => {
+    return stocks.filter((stock) => {
+      const matchesSearch = searchQuery
+        ? stock.code.includes(searchQuery) || stock.name.includes(searchQuery)
+        : true
+      const matchesExchange = exchangeFilter === 'all'
+        ? true
+        : stock.exchange === exchangeFilter
+      const matchesSector = sectorFilter === 'all'
+        ? true
+        : stock.industry === sectorFilter
+      return matchesSearch && matchesExchange && matchesSector
+    })
+  }, [stocks, searchQuery, exchangeFilter, sectorFilter])
+
+  const exchangeOptions = [
+    { value: 'all', label: '全部交易所' },
+    { value: 'SH', label: '沪市' },
+    { value: 'SZ', label: '深市' },
+  ]
+
+  const sectorOptions = useMemo(() => [
+    { value: 'all', label: '全部板块' },
+    ...Array.from(new Set(stocks.filter(s => s.industry).map(s => s.industry!))).map(industry => ({
+      value: industry,
+      label: industry,
+    })),
+  ], [stocks])
+
+  const stockColumns = [
+    {
+      key: 'code',
+      title: '代码',
+      sortable: true,
+      width: '100px',
+      render: (value: string) => (
+        <span className="font-mono text-text-primary">{value}</span>
+      ),
+    },
+    {
+      key: 'name',
+      title: '名称',
+      sortable: true,
+      width: '100px',
+      render: (value: string) => (
+        <span className="text-text-secondary">{value}</span>
+      ),
+    },
+    {
+      key: 'currentPrice',
+      title: '最新价',
+      sortable: true,
+      align: 'right' as const,
+      render: (value: number) => (
+        <PriceDisplay value={value} size="sm" />
+      ),
+    },
+    {
+      key: 'changePercent',
+      title: '涨跌幅',
+      sortable: true,
+      align: 'right' as const,
+      render: (value: number) => (
+        <ChangeBadge value={value} size="sm" />
+      ),
+    },
+    {
+      key: 'volume',
+      title: '成交量',
+      sortable: true,
+      align: 'right' as const,
+      render: (value: number) => (
+        <span className="font-mono text-text-tertiary">{formatVolume(value)}</span>
+      ),
+    },
+    {
+      key: 'amount',
+      title: '成交额',
+      sortable: true,
+      align: 'right' as const,
+      render: (value: number) => (
+        <span className="font-mono text-text-tertiary">{formatVolume(value)}</span>
+      ),
+    },
+  ]
+
+  const klineChartData = useMemo(() => {
+    return klineData.map(d => ({
+      date: d.timestamp,
+      open: d.open,
+      high: d.high,
+      low: d.low,
+      close: d.close,
+      volume: d.volume,
+    }))
+  }, [klineData])
+
+  if (loading && stocks.length === 0 && indices.length === 0) {
     return (
       <div className="flex items-center justify-center h-96">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent" />
+        <LoadingSpinner size="lg" />
       </div>
     )
   }
@@ -130,187 +179,119 @@ export const MarketPage: React.FC = () => {
         <h1 className="text-2xl font-bold text-text-primary">市场行情</h1>
       </div>
 
-      {/* Index Cards - Real-time */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {indices.map((index) => (
-          <GlassCard key={index.code} className="p-5">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {indices.slice(0, 3).map((idx) => (
+          <GlassCard key={idx.code} className="p-5" hover>
             <div className="flex justify-between items-start mb-3">
-              <span className="text-sm text-text-tertiary">{index.name}</span>
-              <Activity className="w-4 h-4 text-text-tertiary" />
+              <span className="text-sm text-text-tertiary">{idx.name}</span>
+              <Sparkline data={sparklineData[idx.code] || []} width={80} height={28} />
             </div>
-            <div className="text-2xl font-mono text-text-primary mb-2">
-              {index.price.toLocaleString()}
-            </div>
-            <div className="flex items-center justify-between">
-              <div
-                className={`flex items-center gap-1 text-sm font-mono ${
-                  index.change >= 0 ? 'text-up' : 'text-down'
-                }`}
-              >
-                {index.change >= 0 ? (
-                  <TrendingUp className="w-3.5 h-3.5" />
-                ) : (
-                  <TrendingDown className="w-3.5 h-3.5" />
-                )}
-                <span>
-                  {index.change >= 0 ? '+' : ''}
-                  {index.change.toFixed(2)}
-                </span>
-                <span>({index.change >= 0 ? '+' : ''}{index.changePct.toFixed(2)}%)</span>
-              </div>
+            <PriceDisplay value={idx.currentPrice} change={idx.change} size="lg" />
+            <div className="mt-2 flex items-center gap-2">
+              <ChangeBadge value={idx.changePercent} size="sm" />
+              <span className={cn('text-xs font-mono', idx.change >= 0 ? 'text-up' : 'text-down')}>
+                {idx.change >= 0 ? '+' : ''}{formatNumber(idx.change)}
+              </span>
             </div>
           </GlassCard>
         ))}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Stock Table */}
         <div className="lg:col-span-2 space-y-4">
           <GlassCard className="p-6">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-semibold text-text-primary">股票列表</h2>
               <div className="flex items-center gap-3">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary" />
-                  <GlassInput
-                    value={searchQuery}
-                    onChange={setSearchQuery}
-                    placeholder="搜索股票代码/名称"
-                    className="pl-9 w-56"
-                  />
-                </div>
-                <div className="flex rounded-glass-sm overflow-hidden border border-glass-border">
-                  {(['all', 'up', 'down'] as const).map((type) => (
-                    <button
-                      key={type}
-                      onClick={() => setFilterType(type)}
-                      className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                        filterType === type
-                          ? 'bg-accent/20 text-accent'
-                          : 'text-text-tertiary hover:text-text-primary'
-                      }`}
-                    >
-                      {type === 'all' ? '全部' : type === 'up' ? '上涨' : '下跌'}
-                    </button>
-                  ))}
-                </div>
+                <GlassInput
+                  value={searchQuery}
+                  onChange={setSearchQuery}
+                  placeholder="搜索股票代码/名称"
+                  icon={<Search className="w-4 h-4" />}
+                  className="w-56"
+                />
+                <GlassSelect
+                  options={exchangeOptions}
+                  value={exchangeFilter}
+                  onChange={setExchangeFilter}
+                  className="w-32"
+                />
+                <GlassSelect
+                  options={sectorOptions}
+                  value={sectorFilter}
+                  onChange={setSectorFilter}
+                  className="w-32"
+                />
               </div>
             </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="text-left text-xs text-text-tertiary border-b border-glass-border">
-                    <th className="pb-3 font-medium">股票</th>
-                    <th className="pb-3 font-medium text-right">最新价</th>
-                    <th className="pb-3 font-medium text-right">涨跌幅</th>
-                    <th className="pb-3 font-medium text-right">成交量</th>
-                    <th className="pb-3 font-medium text-right">市值</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredStocks.map((stock) => (
-                    <tr
-                      key={stock.code}
-                      className="border-b border-glass-border/50 hover:bg-glass-bg-hover/30 transition-colors"
-                    >
-                      <td className="py-3">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-sm text-text-primary">{stock.code}</span>
-                          <span className="text-sm text-text-secondary">{stock.name}</span>
-                        </div>
-                      </td>
-                      <td className="py-3 text-right font-mono text-sm text-text-primary">
-                        ¥{stock.price.toFixed(2)}
-                      </td>
-                      <td
-                        className={`py-3 text-right font-mono text-sm ${
-                          stock.changePct >= 0 ? 'text-up' : 'text-down'
-                        }`}
-                      >
-                        <div className="flex items-center justify-end gap-1">
-                          {stock.changePct >= 0 ? (
-                            <ArrowUpRight className="w-3.5 h-3.5" />
-                          ) : (
-                            <ArrowDownRight className="w-3.5 h-3.5" />
-                          )}
-                          <span>
-                            {stock.changePct >= 0 ? '+' : ''}
-                            {stock.changePct.toFixed(2)}%
-                          </span>
-                        </div>
-                      </td>
-                      <td className="py-3 text-right font-mono text-sm text-text-primary">
-                        {stock.volume.toLocaleString()}
-                      </td>
-                      <td className="py-3 text-right font-mono text-sm text-text-secondary">
-                        {stock.marketCap}
-                      </td>
-                    </tr>
-                  ))}
-                  {filteredStocks.length === 0 && (
-                    <tr>
-                      <td colSpan={5} className="py-8 text-center text-text-tertiary text-sm">
-                        暂无数据
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <GlassTable
+              columns={stockColumns}
+              data={filteredStocks}
+              rowKey="code"
+              onRowClick={handleStockClick}
+              hover
+            />
           </GlassCard>
         </div>
 
-        {/* Hot Sectors */}
         <div className="space-y-4">
           <GlassCard className="p-6">
             <div className="flex items-center gap-2 mb-6">
               <Flame className="w-5 h-5 text-accent" />
               <h2 className="text-lg font-semibold text-text-primary">热门板块</h2>
             </div>
-
             <div className="space-y-3">
-              {sectors.map((sector) => (
+              {hotSectors.map((sector) => (
                 <div
-                  key={sector.name}
-                  className="flex items-center justify-between p-3 rounded-glass-sm bg-glass-bg-hover/20 hover:bg-glass-bg-hover/40 transition-colors"
+                  key={sector.code}
+                  className="p-3 rounded-glass-sm bg-white/[0.02] hover:bg-white/[0.04] transition-colors"
                 >
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-sm font-medium text-text-primary">{sector.name}</span>
-                      <div className="flex-1 h-1.5 bg-glass-bg-hover rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-accent rounded-full"
-                          style={{ width: `${sector.heat}%` }}
-                        />
-                      </div>
-                    </div>
-                    <span className="text-xs text-text-tertiary">龙头: {sector.leadingStock}</span>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-text-primary">{sector.name}</span>
+                    <ChangeBadge value={sector.changePercent} size="sm" />
                   </div>
-                  <div
-                    className={`text-right font-mono text-sm ${
-                      sector.changePct >= 0 ? 'text-up' : 'text-down'
-                    }`}
-                  >
-                    <div className="flex items-center gap-1">
-                      {sector.changePct >= 0 ? (
-                        <TrendingUp className="w-3.5 h-3.5" />
-                      ) : (
-                        <TrendingDown className="w-3.5 h-3.5" />
+                  <div className="h-1.5 bg-white/[0.06] rounded-full overflow-hidden mb-2">
+                    <div
+                      className={cn(
+                        'h-full rounded-full transition-all',
+                        sector.changePercent >= 0 ? 'bg-up' : 'bg-down'
                       )}
-                      <span>
-                        {sector.changePct >= 0 ? '+' : ''}
-                        {sector.changePct.toFixed(2)}%
-                      </span>
-                    </div>
+                      style={{ width: `${Math.min(100, Math.abs(sector.changePercent) * 10 + 50)}%` }}
+                    />
                   </div>
+                  {sector.topStocks && sector.topStocks.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {sector.topStocks.slice(0, 3).map((s) => (
+                        <GlassBadge key={s.code} variant={s.changePercent >= 0 ? 'up' : 'down'} size="sm">
+                          {s.name}
+                        </GlassBadge>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
-              {sectors.length === 0 && <p className="text-text-tertiary text-sm">暂无数据</p>}
+              {hotSectors.length === 0 && <p className="text-text-tertiary text-sm">暂无数据</p>}
             </div>
           </GlassCard>
         </div>
       </div>
+
+      <GlassDialog
+        open={klineDialogOpen}
+        onClose={handleCloseKlineDialog}
+        title={currentStock ? `${currentStock.name} (${currentStock.code})` : ''}
+        size="lg"
+      >
+        {klineLoading ? (
+          <div className="flex items-center justify-center h-64">
+            <LoadingSpinner size="md" />
+          </div>
+        ) : klineChartData.length > 0 ? (
+          <KlineChart data={klineChartData} height={400} showVolume showMacd />
+        ) : (
+          <p className="text-text-tertiary text-sm text-center py-8">暂无K线数据</p>
+        )}
+      </GlassDialog>
     </div>
   )
 }

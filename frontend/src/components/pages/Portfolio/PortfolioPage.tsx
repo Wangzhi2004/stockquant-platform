@@ -1,405 +1,599 @@
-import React, { useState } from 'react'
-import { GlassCard } from '@/components/glass/GlassCard'
-import { GlassButton } from '@/components/glass/GlassButton'
-import { GlassInput } from '@/components/glass/GlassInput'
+import React, { useState, useMemo, useCallback } from 'react'
+import {
+  GlassCard,
+  GlassTable,
+  GlassDialog,
+  GlassBadge,
+  GlassButton,
+  GlassInput,
+  GlassTabs,
+} from '@/components/glass'
+import { PriceDisplay, ChangeBadge } from '@/components/common'
+import { DonutChart, PortfolioChart } from '@/components/charts'
+import { usePortfolio } from '@/hooks/usePortfolio'
+import { formatCurrency, formatPercent, formatDate, formatNumber } from '@/utils/formatters'
+import type { Holding, Transaction } from '@/types'
 import {
   Briefcase,
-  TrendingUp,
-  TrendingDown,
   Plus,
-  Edit3,
-  X,
+  TrendingUp,
+  Wallet,
+  PieChart,
+  BarChart3,
+  Loader2,
 } from 'lucide-react'
 
-interface Portfolio {
-  id: string
-  name: string
-  description: string
-  initialCapital: number
-  totalMarketValue: number
-  totalProfitLoss: number
-  totalProfitLossPct: number
-  holdingsCount: number
-}
-
-interface Holding {
-  id: string
-  stockCode: string
-  stockName: string
-  costPrice: number
-  quantity: number
-  currentPrice: number
-  marketValue: number
-  profitLoss: number
-  profitLossPct: number
-}
-
-interface Transaction {
-  id: string
-  stockCode: string
-  type: 'buy' | 'sell'
-  price: number
-  quantity: number
-  fee: number
-  date: string
-}
-
-const mockPortfolios: Portfolio[] = [
-  {
-    id: '1',
-    name: '主账户',
-    description: '长期价值投资组合',
-    initialCapital: 1000000,
-    totalMarketValue: 1234567,
-    totalProfitLoss: 234567,
-    totalProfitLossPct: 23.46,
-    holdingsCount: 8,
-  },
-  {
-    id: '2',
-    name: '量化策略',
-    description: '动量交易策略',
-    initialCapital: 500000,
-    totalMarketValue: 543210,
-    totalProfitLoss: 43210,
-    totalProfitLossPct: 8.64,
-    holdingsCount: 5,
-  },
+const ALLOCATION_COLORS = [
+  '#5b8def',
+  '#00e5a0',
+  '#ff4567',
+  '#ffb347',
+  '#a78bfa',
+  '#f472b6',
+  '#34d399',
+  '#fbbf24',
 ]
 
-const mockHoldings: Holding[] = [
-  {
-    id: '1',
-    stockCode: '600519',
-    stockName: '贵州茅台',
-    costPrice: 1680.0,
-    quantity: 100,
-    currentPrice: 1780.5,
-    marketValue: 178050,
-    profitLoss: 10050,
-    profitLossPct: 5.98,
-  },
-  {
-    id: '2',
-    stockCode: '000858',
-    stockName: '五粮液',
-    costPrice: 145.0,
-    quantity: 500,
-    currentPrice: 138.2,
-    marketValue: 69100,
-    profitLoss: -3400,
-    profitLossPct: -4.69,
-  },
-  {
-    id: '3',
-    stockCode: '300750',
-    stockName: '宁德时代',
-    costPrice: 210.0,
-    quantity: 200,
-    currentPrice: 228.4,
-    marketValue: 45680,
-    profitLoss: 3680,
-    profitLossPct: 8.76,
-  },
-]
-
-const mockTransactions: Transaction[] = [
-  { id: '1', stockCode: '600519', type: 'buy', price: 1680.0, quantity: 100, fee: 168, date: '2024-01-15' },
-  { id: '2', stockCode: '000858', type: 'buy', price: 145.0, quantity: 500, fee: 362.5, date: '2024-02-01' },
-  { id: '3', stockCode: '300750', type: 'buy', price: 210.0, quantity: 200, fee: 84, date: '2024-02-20' },
-]
+const generateMockChartData = (totalValue: number) => {
+  const data = []
+  const baseValue = totalValue * 0.85
+  const benchmarkBase = totalValue * 0.85
+  for (let i = 90; i >= 0; i--) {
+    const d = new Date()
+    d.setDate(d.getDate() - i)
+    const progress = (90 - i) / 90
+    const noise = Math.sin(i * 0.3) * 0.03 + Math.cos(i * 0.7) * 0.02
+    const benchmarkNoise = Math.sin(i * 0.2) * 0.02 + Math.cos(i * 0.5) * 0.015
+    data.push({
+      date: `${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getDate().toString().padStart(2, '0')}`,
+      value: Math.round(baseValue * (1 + progress * 0.18 + noise)),
+      benchmark: Math.round(benchmarkBase * (1 + progress * 0.08 + benchmarkNoise)),
+    })
+  }
+  return data
+}
 
 export const PortfolioPage: React.FC = () => {
-  const [selectedPortfolio, setSelectedPortfolio] = useState<string>('1')
-  const [showModal, setShowModal] = useState(false)
-  const [modalMode, setModalMode] = useState<'add' | 'edit'>('add')
-  const [formData, setFormData] = useState({ name: '', description: '', initialCapital: '' })
-  const [activeTab, setActiveTab] = useState<'holdings' | 'transactions'>('holdings')
+  const {
+    portfolios,
+    currentPortfolio,
+    holdings,
+    transactions,
+    stats,
+    loading,
+    error,
+    createPortfolio,
+    setCurrentPortfolio,
+    addHolding,
+    clearError,
+  } = usePortfolio()
 
-  const currentPortfolio = mockPortfolios.find((p) => p.id === selectedPortfolio)
+  const [activeTab, setActiveTab] = useState<'holdings' | 'transactions' | 'performance'>('holdings')
+  const [createDialogOpen, setCreateDialogOpen] = useState(false)
+  const [addHoldingDialogOpen, setAddHoldingDialogOpen] = useState(false)
+  const [createForm, setCreateForm] = useState({ name: '', description: '', initialCapital: '' })
+  const [holdingForm, setHoldingForm] = useState({ stockCode: '', stockName: '', quantity: '', avgCost: '' })
 
-  const openAddModal = () => {
-    setModalMode('add')
-    setFormData({ name: '', description: '', initialCapital: '' })
-    setShowModal(true)
-  }
+  const allocationSegments = useMemo(() => {
+    if (!holdings.length) return []
+    return holdings.map((h, i) => ({
+      label: h.stockName || h.stockCode,
+      value: h.marketValue || h.avgCost * h.quantity,
+      color: ALLOCATION_COLORS[i % ALLOCATION_COLORS.length],
+    }))
+  }, [holdings])
 
-  const openEditModal = (portfolio: Portfolio) => {
-    setModalMode('edit')
-    setFormData({
-      name: portfolio.name,
-      description: portfolio.description,
-      initialCapital: portfolio.initialCapital.toString(),
+  const chartData = useMemo(() => {
+    if (!stats) return []
+    return generateMockChartData(stats.totalValue)
+  }, [stats])
+
+  const totalMarketValue = useMemo(() => {
+    return holdings.reduce((sum, h) => sum + (h.marketValue || h.avgCost * h.quantity), 0)
+  }, [holdings])
+
+  const holdingColumns = useMemo(() => [
+    {
+      key: 'stockCode',
+      title: '股票代码',
+      sortable: true,
+      width: '100px',
+      render: (_: string, row: Holding) => (
+        <span className="font-mono text-text-primary">{row.stockCode}</span>
+      ),
+    },
+    {
+      key: 'stockName',
+      title: '名称',
+      sortable: true,
+      width: '90px',
+      render: (_: string, row: Holding) => (
+        <span className="text-text-secondary">{row.stockName}</span>
+      ),
+    },
+    {
+      key: 'quantity',
+      title: '持仓数量',
+      sortable: true,
+      align: 'right' as const,
+      render: (val: number) => <span className="font-mono">{formatNumber(val, 0)}</span>,
+    },
+    {
+      key: 'avgCost',
+      title: '成本价',
+      sortable: true,
+      align: 'right' as const,
+      render: (val: number) => <span className="font-mono">{formatCurrency(val)}</span>,
+    },
+    {
+      key: 'currentPrice',
+      title: '现价',
+      sortable: true,
+      align: 'right' as const,
+      render: (val: number) => (
+        <span className="font-mono">{val ? formatCurrency(val) : '-'}</span>
+      ),
+    },
+    {
+      key: 'profitLoss',
+      title: '盈亏',
+      sortable: true,
+      align: 'right' as const,
+      render: (val: number) => (
+        <span className={`font-mono ${val != null && val >= 0 ? 'text-up' : val != null ? 'text-down' : 'text-text-tertiary'}`}>
+          {val != null ? formatCurrency(val) : '-'}
+        </span>
+      ),
+    },
+    {
+      key: 'profitLossPercent',
+      title: '盈亏%',
+      sortable: true,
+      align: 'right' as const,
+      render: (val: number) =>
+        val != null ? (
+          <ChangeBadge value={val} size="sm" />
+        ) : (
+          <span className="text-text-tertiary">-</span>
+        ),
+    },
+    {
+      key: 'marketValue',
+      title: '仓位占比',
+      sortable: true,
+      align: 'right' as const,
+      render: (val: number) => {
+        const pct = totalMarketValue > 0 ? (val || 0) / totalMarketValue : 0
+        return <span className="font-mono text-text-secondary">{formatPercent(pct)}</span>
+      },
+    },
+  ], [totalMarketValue])
+
+  const transactionColumns = useMemo(() => [
+    {
+      key: 'transactionDate',
+      title: '日期',
+      sortable: true,
+      width: '100px',
+      render: (val: string) => <span className="text-text-secondary">{formatDate(val)}</span>,
+    },
+    {
+      key: 'stockCode',
+      title: '股票',
+      sortable: true,
+      render: (_: string, row: Transaction) => (
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-text-primary">{row.stockCode}</span>
+          <span className="text-text-secondary text-xs">{row.stockName}</span>
+        </div>
+      ),
+    },
+    {
+      key: 'type',
+      title: '方向',
+      sortable: true,
+      width: '70px',
+      align: 'center' as const,
+      render: (val: 'buy' | 'sell') => (
+        <GlassBadge variant={val === 'buy' ? 'up' : 'down'} size="sm">
+          {val === 'buy' ? '买入' : '卖出'}
+        </GlassBadge>
+      ),
+    },
+    {
+      key: 'price',
+      title: '价格',
+      sortable: true,
+      align: 'right' as const,
+      render: (val: number) => <span className="font-mono">{formatCurrency(val)}</span>,
+    },
+    {
+      key: 'quantity',
+      title: '数量',
+      sortable: true,
+      align: 'right' as const,
+      render: (val: number) => <span className="font-mono">{formatNumber(val, 0)}</span>,
+    },
+    {
+      key: 'amount',
+      title: '金额',
+      sortable: true,
+      align: 'right' as const,
+      render: (val: number) => <span className="font-mono">{formatCurrency(val)}</span>,
+    },
+    {
+      key: 'fee',
+      title: '手续费',
+      sortable: true,
+      align: 'right' as const,
+      render: (val: number) => (
+        <span className="font-mono text-text-tertiary">{formatCurrency(val)}</span>
+      ),
+    },
+  ], [])
+
+  const handleCreatePortfolio = useCallback(async () => {
+    if (!createForm.name.trim()) return
+    await createPortfolio({
+      name: createForm.name.trim(),
+      description: createForm.description.trim(),
     })
-    setShowModal(true)
+    setCreateDialogOpen(false)
+    setCreateForm({ name: '', description: '', initialCapital: '' })
+  }, [createForm, createPortfolio])
+
+  const handleAddHolding = useCallback(async () => {
+    if (!currentPortfolio || !holdingForm.stockCode.trim() || !holdingForm.quantity || !holdingForm.avgCost) return
+    await addHolding(currentPortfolio.id, {
+      stockCode: holdingForm.stockCode.trim(),
+      stockName: holdingForm.stockName.trim(),
+      quantity: Number(holdingForm.quantity),
+      avgCost: Number(holdingForm.avgCost),
+    })
+    setAddHoldingDialogOpen(false)
+    setHoldingForm({ stockCode: '', stockName: '', quantity: '', avgCost: '' })
+  }, [currentPortfolio, holdingForm, addHolding])
+
+  const tabs = [
+    { key: 'holdings', label: '持仓明细', icon: <PieChart className="w-3.5 h-3.5" /> },
+    { key: 'transactions', label: '交易记录', icon: <BarChart3 className="w-3.5 h-3.5" /> },
+    { key: 'performance', label: '收益曲线', icon: <TrendingUp className="w-3.5 h-3.5" /> },
+  ]
+
+  if (loading && portfolios.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <Loader2 className="w-8 h-8 text-accent animate-spin" />
+      </div>
+    )
   }
 
   return (
     <div className="space-y-6 p-6">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Briefcase className="w-6 h-6 text-accent" />
           <h1 className="text-2xl font-bold text-text-primary">投资组合</h1>
         </div>
-        <GlassButton variant="primary" size="sm" onClick={openAddModal}>
-          <Plus className="w-4 h-4 mr-1" />
+        <GlassButton
+          variant="primary"
+          size="sm"
+          icon={<Plus className="w-4 h-4" />}
+          onClick={() => setCreateDialogOpen(true)}
+        >
           新建组合
         </GlassButton>
       </div>
 
-      {/* Portfolio List */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {mockPortfolios.map((portfolio) => (
-          <GlassCard
-            key={portfolio.id}
-            className={`p-6 cursor-pointer transition-all ${
-              selectedPortfolio === portfolio.id ? 'ring-2 ring-accent/50' : ''
-            }`}
-            onClick={() => setSelectedPortfolio(portfolio.id)}
-          >
-            <div className="flex justify-between items-start mb-4">
-              <div>
-                <h3 className="text-lg font-semibold text-text-primary">{portfolio.name}</h3>
-                <p className="text-sm text-text-tertiary">{portfolio.description}</p>
-              </div>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  openEditModal(portfolio)
-                }}
-                className="p-1.5 rounded-glass-sm text-text-tertiary hover:text-text-primary hover:bg-glass-bg-hover transition-all"
-              >
-                <Edit3 className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4 mb-4">
-              <div>
-                <p className="text-xs text-text-tertiary mb-1">总市值</p>
-                <p className="text-xl font-mono text-text-primary">
-                  ¥{portfolio.totalMarketValue.toLocaleString()}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs text-text-tertiary mb-1">盈亏</p>
-                <div
-                  className={`flex items-center gap-1 text-xl font-mono ${
-                    portfolio.totalProfitLoss >= 0 ? 'text-up' : 'text-down'
-                  }`}
-                >
-                  {portfolio.totalProfitLoss >= 0 ? (
-                    <TrendingUp className="w-4 h-4" />
-                  ) : (
-                    <TrendingDown className="w-4 h-4" />
-                  )}
-                  <span>
-                    {portfolio.totalProfitLoss >= 0 ? '+' : ''}
-                    {portfolio.totalProfitLossPct.toFixed(2)}%
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-text-tertiary">{portfolio.holdingsCount} 只持仓</span>
-              <span className="text-text-tertiary">
-                初始资金 ¥{portfolio.initialCapital.toLocaleString()}
-              </span>
-            </div>
-          </GlassCard>
-        ))}
-      </div>
-
-      {/* Holdings / Transactions Tabs */}
-      {currentPortfolio && (
-        <GlassCard className="p-6">
-          <div className="flex items-center gap-6 mb-6 border-b border-glass-border pb-4">
-            <button
-              onClick={() => setActiveTab('holdings')}
-              className={`text-sm font-medium transition-colors ${
-                activeTab === 'holdings' ? 'text-accent' : 'text-text-tertiary hover:text-text-primary'
-              }`}
-            >
-              持仓明细
-            </button>
-            <button
-              onClick={() => setActiveTab('transactions')}
-              className={`text-sm font-medium transition-colors ${
-                activeTab === 'transactions'
-                  ? 'text-accent'
-                  : 'text-text-tertiary hover:text-text-primary'
-              }`}
-            >
-              交易记录
-            </button>
-          </div>
-
-          {activeTab === 'holdings' ? (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="text-left text-xs text-text-tertiary border-b border-glass-border">
-                    <th className="pb-3 font-medium">股票</th>
-                    <th className="pb-3 font-medium text-right">成本价</th>
-                    <th className="pb-3 font-medium text-right">现价</th>
-                    <th className="pb-3 font-medium text-right">数量</th>
-                    <th className="pb-3 font-medium text-right">市值</th>
-                    <th className="pb-3 font-medium text-right">盈亏</th>
-                    <th className="pb-3 font-medium text-right">盈亏率</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {mockHoldings.map((holding) => (
-                    <tr
-                      key={holding.id}
-                      className="border-b border-glass-border/50 hover:bg-glass-bg-hover/30 transition-colors"
-                    >
-                      <td className="py-3">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-sm text-text-primary">
-                            {holding.stockCode}
-                          </span>
-                          <span className="text-sm text-text-secondary">{holding.stockName}</span>
-                        </div>
-                      </td>
-                      <td className="py-3 text-right font-mono text-sm text-text-primary">
-                        ¥{holding.costPrice.toFixed(2)}
-                      </td>
-                      <td className="py-3 text-right font-mono text-sm text-text-primary">
-                        ¥{holding.currentPrice.toFixed(2)}
-                      </td>
-                      <td className="py-3 text-right font-mono text-sm text-text-primary">
-                        {holding.quantity}
-                      </td>
-                      <td className="py-3 text-right font-mono text-sm text-text-primary">
-                        ¥{holding.marketValue.toLocaleString()}
-                      </td>
-                      <td
-                        className={`py-3 text-right font-mono text-sm ${
-                          holding.profitLoss >= 0 ? 'text-up' : 'text-down'
-                        }`}
-                      >
-                        {holding.profitLoss >= 0 ? '+' : ''}¥{holding.profitLoss.toLocaleString()}
-                      </td>
-                      <td
-                        className={`py-3 text-right font-mono text-sm ${
-                          holding.profitLossPct >= 0 ? 'text-up' : 'text-down'
-                        }`}
-                      >
-                        {holding.profitLossPct >= 0 ? '+' : ''}
-                        {holding.profitLossPct.toFixed(2)}%
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="text-left text-xs text-text-tertiary border-b border-glass-border">
-                    <th className="pb-3 font-medium">日期</th>
-                    <th className="pb-3 font-medium">股票</th>
-                    <th className="pb-3 font-medium">类型</th>
-                    <th className="pb-3 font-medium text-right">价格</th>
-                    <th className="pb-3 font-medium text-right">数量</th>
-                    <th className="pb-3 font-medium text-right">手续费</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {mockTransactions.map((tx) => (
-                    <tr
-                      key={tx.id}
-                      className="border-b border-glass-border/50 hover:bg-glass-bg-hover/30 transition-colors"
-                    >
-                      <td className="py-3 text-sm text-text-secondary">{tx.date}</td>
-                      <td className="py-3 font-mono text-sm text-text-primary">{tx.stockCode}</td>
-                      <td className="py-3">
-                        <span
-                          className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                            tx.type === 'buy'
-                              ? 'bg-up/10 text-up'
-                              : 'bg-down/10 text-down'
-                          }`}
-                        >
-                          {tx.type === 'buy' ? '买入' : '卖出'}
-                        </span>
-                      </td>
-                      <td className="py-3 text-right font-mono text-sm text-text-primary">
-                        ¥{tx.price.toFixed(2)}
-                      </td>
-                      <td className="py-3 text-right font-mono text-sm text-text-primary">
-                        {tx.quantity}
-                      </td>
-                      <td className="py-3 text-right font-mono text-sm text-text-tertiary">
-                        ¥{tx.fee.toFixed(2)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </GlassCard>
-      )}
-
-      {/* Add/Edit Modal */}
-      {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <GlassCard className="w-full max-w-md p-6 mx-4">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-semibold text-text-primary">
-                {modalMode === 'add' ? '新建组合' : '编辑组合'}
-              </h3>
-              <button
-                onClick={() => setShowModal(false)}
-                className="p-1 rounded-glass-sm text-text-tertiary hover:text-text-primary transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-text-secondary mb-2">组合名称</label>
-                <GlassInput
-                  value={formData.name}
-                  onChange={(v) => setFormData({ ...formData, name: v })}
-                  placeholder="输入组合名称"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-text-secondary mb-2">描述</label>
-                <GlassInput
-                  value={formData.description}
-                  onChange={(v) => setFormData({ ...formData, description: v })}
-                  placeholder="输入组合描述"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-text-secondary mb-2">初始资金</label>
-                <GlassInput
-                  type="number"
-                  value={formData.initialCapital}
-                  onChange={(v) => setFormData({ ...formData, initialCapital: v })}
-                  placeholder="1000000"
-                />
-              </div>
-            </div>
-
-            <div className="flex gap-3 mt-6">
-              <GlassButton variant="secondary" className="flex-1" onClick={() => setShowModal(false)}>
-                取消
-              </GlassButton>
-              <GlassButton variant="primary" className="flex-1" onClick={() => setShowModal(false)}>
-                {modalMode === 'add' ? '创建' : '保存'}
-              </GlassButton>
-            </div>
-          </GlassCard>
+      {error && (
+        <div className="flex items-center gap-2 px-4 py-3 rounded-glass-sm bg-down/10 border border-down/20 text-down text-sm">
+          <span>{error}</span>
+          <button onClick={clearError} className="ml-auto text-down/60 hover:text-down">
+            ×
+          </button>
         </div>
       )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {portfolios.map((portfolio) => {
+          const isSelected = currentPortfolio?.id === portfolio.id
+          return (
+            <GlassCard
+              key={portfolio.id}
+              className={isSelected ? 'ring-1 ring-accent/40' : ''}
+              highlight={isSelected}
+              onClick={() => setCurrentPortfolio(portfolio)}
+            >
+              <div className="flex items-start justify-between mb-3">
+                <div>
+                  <h3 className="text-base font-semibold text-text-primary">{portfolio.name}</h3>
+                  {portfolio.description && (
+                    <p className="text-xs text-text-tertiary mt-0.5">{portfolio.description}</p>
+                  )}
+                </div>
+                {isSelected && <GlassBadge variant="accent" size="sm">当前</GlassBadge>}
+              </div>
+              {isSelected && stats && (
+                <div className="grid grid-cols-2 gap-3 mt-3 pt-3 border-t border-white/[0.04]">
+                  <div>
+                    <p className="text-[10px] text-text-tertiary mb-1">总市值</p>
+                    <PriceDisplay value={stats.totalValue} size="sm" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-text-tertiary mb-1">日涨跌</p>
+                    <ChangeBadge value={stats.dailyProfitLossPercent} size="md" glow />
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-text-tertiary mb-1">总收益</p>
+                    <span
+                      className={`font-mono text-sm font-semibold ${
+                        stats.totalProfitLoss >= 0 ? 'text-up' : 'text-down'
+                      }`}
+                    >
+                      {formatCurrency(stats.totalProfitLoss)}
+                    </span>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-text-tertiary mb-1">持仓数</p>
+                    <span className="font-mono text-sm text-text-primary">{stats.holdingsCount}</span>
+                  </div>
+                </div>
+              )}
+            </GlassCard>
+          )
+        })}
+      </div>
+
+      {currentPortfolio && stats && (
+        <>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <GlassCard className="lg:col-span-2">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+                <div>
+                  <p className="text-xs text-text-tertiary mb-2 flex items-center gap-1.5">
+                    <Wallet className="w-3.5 h-3.5" />
+                    总市值
+                  </p>
+                  <PriceDisplay value={stats.totalValue} change={stats.dailyProfitLoss} size="lg" />
+                </div>
+                <div>
+                  <p className="text-xs text-text-tertiary mb-2">日涨跌</p>
+                  <ChangeBadge value={stats.dailyProfitLossPercent} size="md" glow />
+                  <p
+                    className={`font-mono text-sm mt-1 ${
+                      stats.dailyProfitLoss >= 0 ? 'text-up' : 'text-down'
+                    }`}
+                  >
+                    {formatCurrency(stats.dailyProfitLoss)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-text-tertiary mb-2">总收益率</p>
+                  <ChangeBadge value={stats.totalProfitLossPercent} size="md" />
+                  <p
+                    className={`font-mono text-sm mt-1 ${
+                      stats.totalProfitLoss >= 0 ? 'text-up' : 'text-down'
+                    }`}
+                  >
+                    {formatCurrency(stats.totalProfitLoss)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-text-tertiary mb-2 flex items-center gap-1.5">
+                    <PieChart className="w-3.5 h-3.5" />
+                    持仓概况
+                  </p>
+                  <span className="text-2xl font-mono font-semibold text-text-primary">
+                    {stats.holdingsCount}
+                  </span>
+                  <span className="text-xs text-text-tertiary ml-1">只</span>
+                  {stats.topGainer && (
+                    <p className="text-[10px] text-up mt-1.5">
+                      最赚 {stats.topGainer.stockName}{' '}
+                      {formatPercent(stats.topGainer.profitLossPercent || 0)}
+                    </p>
+                  )}
+                  {stats.topLoser && (
+                    <p className="text-[10px] text-down mt-0.5">
+                      最亏 {stats.topLoser.stockName}{' '}
+                      {formatPercent(stats.topLoser.profitLossPercent || 0)}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </GlassCard>
+
+            <GlassCard>
+              <p className="text-xs text-text-tertiary mb-3">仓位配置</p>
+              {allocationSegments.length > 0 ? (
+                <DonutChart segments={allocationSegments} size={120} strokeWidth={16} showLabels />
+              ) : (
+                <div className="flex items-center justify-center h-[120px] text-text-tertiary text-sm">
+                  暂无持仓
+                </div>
+              )}
+            </GlassCard>
+          </div>
+
+          <GlassCard>
+            <div className="flex items-center justify-between mb-4">
+              <GlassTabs
+                tabs={tabs}
+                activeKey={activeTab}
+                onChange={(k) => setActiveTab(k as typeof activeTab)}
+                size="sm"
+              />
+              {activeTab === 'holdings' && (
+                <GlassButton
+                  variant="ghost"
+                  size="sm"
+                  icon={<Plus className="w-3.5 h-3.5" />}
+                  onClick={() => setAddHoldingDialogOpen(true)}
+                >
+                  添加持仓
+                </GlassButton>
+              )}
+            </div>
+
+            {activeTab === 'holdings' &&
+              (holdings.length > 0 ? (
+                <GlassTable columns={holdingColumns} data={holdings} rowKey="id" compact />
+              ) : (
+                <div className="flex flex-col items-center justify-center py-12 text-text-tertiary">
+                  <PieChart className="w-10 h-10 mb-2 opacity-30" />
+                  <p className="text-sm">暂无持仓</p>
+                  <GlassButton
+                    variant="ghost"
+                    size="sm"
+                    className="mt-3"
+                    onClick={() => setAddHoldingDialogOpen(true)}
+                  >
+                    添加持仓
+                  </GlassButton>
+                </div>
+              ))}
+
+            {activeTab === 'transactions' &&
+              (transactions.length > 0 ? (
+                <GlassTable columns={transactionColumns} data={transactions} rowKey="id" compact />
+              ) : (
+                <div className="flex flex-col items-center justify-center py-12 text-text-tertiary">
+                  <BarChart3 className="w-10 h-10 mb-2 opacity-30" />
+                  <p className="text-sm">暂无交易记录</p>
+                </div>
+              ))}
+
+            {activeTab === 'performance' &&
+              (chartData.length > 0 ? (
+                <PortfolioChart data={chartData} height={360} />
+              ) : (
+                <div className="flex flex-col items-center justify-center py-12 text-text-tertiary">
+                  <TrendingUp className="w-10 h-10 mb-2 opacity-30" />
+                  <p className="text-sm">暂无收益数据</p>
+                </div>
+              ))}
+          </GlassCard>
+        </>
+      )}
+
+      {!currentPortfolio && portfolios.length > 0 && (
+        <div className="flex flex-col items-center justify-center py-16 text-text-tertiary">
+          <Briefcase className="w-12 h-12 mb-3 opacity-30" />
+          <p className="text-sm">请选择一个投资组合</p>
+        </div>
+      )}
+
+      {portfolios.length === 0 && !loading && (
+        <div className="flex flex-col items-center justify-center py-16 text-text-tertiary">
+          <Briefcase className="w-12 h-12 mb-3 opacity-30" />
+          <p className="text-sm mb-3">还没有投资组合</p>
+          <GlassButton
+            variant="primary"
+            size="sm"
+            icon={<Plus className="w-4 h-4" />}
+            onClick={() => setCreateDialogOpen(true)}
+          >
+            新建组合
+          </GlassButton>
+        </div>
+      )}
+
+      <GlassDialog
+        open={createDialogOpen}
+        onClose={() => setCreateDialogOpen(false)}
+        title="新建组合"
+        size="sm"
+        footer={
+          <>
+            <GlassButton variant="secondary" onClick={() => setCreateDialogOpen(false)}>
+              取消
+            </GlassButton>
+            <GlassButton
+              variant="primary"
+              onClick={handleCreatePortfolio}
+              loading={loading}
+              disabled={!createForm.name.trim()}
+            >
+              创建
+            </GlassButton>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <GlassInput
+            label="组合名称"
+            value={createForm.name}
+            onChange={(v) => setCreateForm({ ...createForm, name: v })}
+            placeholder="输入组合名称"
+          />
+          <GlassInput
+            label="描述"
+            value={createForm.description}
+            onChange={(v) => setCreateForm({ ...createForm, description: v })}
+            placeholder="输入组合描述"
+          />
+          <GlassInput
+            label="初始资金"
+            type="number"
+            value={createForm.initialCapital}
+            onChange={(v) => setCreateForm({ ...createForm, initialCapital: v })}
+            placeholder="1000000"
+            icon={<Wallet className="w-4 h-4" />}
+          />
+        </div>
+      </GlassDialog>
+
+      <GlassDialog
+        open={addHoldingDialogOpen}
+        onClose={() => setAddHoldingDialogOpen(false)}
+        title="添加持仓"
+        size="sm"
+        footer={
+          <>
+            <GlassButton variant="secondary" onClick={() => setAddHoldingDialogOpen(false)}>
+              取消
+            </GlassButton>
+            <GlassButton
+              variant="primary"
+              onClick={handleAddHolding}
+              loading={loading}
+              disabled={!holdingForm.stockCode.trim() || !holdingForm.quantity || !holdingForm.avgCost}
+            >
+              添加
+            </GlassButton>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <GlassInput
+            label="股票代码"
+            value={holdingForm.stockCode}
+            onChange={(v) => setHoldingForm({ ...holdingForm, stockCode: v })}
+            placeholder="如 600519"
+          />
+          <GlassInput
+            label="股票名称"
+            value={holdingForm.stockName}
+            onChange={(v) => setHoldingForm({ ...holdingForm, stockName: v })}
+            placeholder="如 贵州茅台"
+          />
+          <GlassInput
+            label="持仓数量"
+            type="number"
+            value={holdingForm.quantity}
+            onChange={(v) => setHoldingForm({ ...holdingForm, quantity: v })}
+            placeholder="100"
+          />
+          <GlassInput
+            label="成本价"
+            type="number"
+            value={holdingForm.avgCost}
+            onChange={(v) => setHoldingForm({ ...holdingForm, avgCost: v })}
+            placeholder="0.00"
+            icon={<Wallet className="w-4 h-4" />}
+          />
+        </div>
+      </GlassDialog>
     </div>
   )
 }

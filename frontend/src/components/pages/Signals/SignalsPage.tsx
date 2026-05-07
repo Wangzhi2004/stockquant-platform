@@ -1,88 +1,202 @@
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { GlassCard } from '@/components/glass/GlassCard'
 import { GlassButton } from '@/components/glass/GlassButton'
-import { GlassInput } from '@/components/glass/GlassInput'
-import { api } from '@/services/api'
+import { GlassTabs } from '@/components/glass/GlassTabs'
+import { GlassSelect } from '@/components/glass/GlassSelect'
+import { GlassBadge } from '@/components/glass/GlassBadge'
+import { GlassTable } from '@/components/glass/GlassTable'
+import { StatusDot } from '@/components/common/StatusDot'
+import { StrengthBar } from '@/components/common/StrengthBar'
+import { LoadingSpinner } from '@/components/common/LoadingSpinner'
+import { signalsService } from '@/services/signals'
+import { StrategySignal, SignalStats, SignalScanRequest } from '@/types'
+import { formatCurrency, formatDateTime, formatNumber } from '@/utils/formatters'
 import {
-  Bell,
-  Search,
-  Zap,
-  ScanLine,
-  Filter,
+  Activity,
   ArrowUpRight,
   ArrowDownRight,
-  Clock,
+  Minus,
+  Radar,
+  TrendingUp,
+  TrendingDown,
+  BarChart3,
 } from 'lucide-react'
 
-interface Signal {
-  id: string
-  stock_code: string
-  signal_type: string
-  signal_strength: number
-  price: string
-  description: string
-  date: string
-  strategy_id: string
-}
+const SIGNAL_TYPE_TABS = [
+  { key: 'all', label: '全部' },
+  { key: 'buy', label: '买入', icon: <TrendingUp className="w-3.5 h-3.5" /> },
+  { key: 'sell', label: '卖出', icon: <TrendingDown className="w-3.5 h-3.5" /> },
+]
 
-interface SignalStats {
-  total: number
-  buy_count: number
-  sell_count: number
-  buy_ratio: number
-  today_count: number
-  week_count: number
+const SIGNAL_TYPE_BADGE_MAP: Record<string, { variant: 'up' | 'down' | 'warning'; label: string; icon: React.ReactNode }> = {
+  buy: { variant: 'up', label: '买入', icon: <ArrowUpRight className="w-3 h-3" /> },
+  sell: { variant: 'down', label: '卖出', icon: <ArrowDownRight className="w-3 h-3" /> },
+  hold: { variant: 'warning', label: '持有', icon: <Minus className="w-3 h-3" /> },
 }
 
 export const SignalsPage: React.FC = () => {
-  const [searchQuery, setSearchQuery] = useState('')
-  const [typeFilter, setTypeFilter] = useState<'all' | 'buy' | 'sell'>('all')
-  const [isScanning, setIsScanning] = useState(false)
-  const [signals, setSignals] = useState<Signal[]>([])
+  const [signals, setSignals] = useState<StrategySignal[]>([])
   const [stats, setStats] = useState<SignalStats | null>(null)
   const [loading, setLoading] = useState(true)
+  const [scanning, setScanning] = useState(false)
+  const [activeTab, setActiveTab] = useState('all')
+  const [strategyFilter, setStrategyFilter] = useState<string>('')
+  const [strategyOptions, setStrategyOptions] = useState<{ value: string; label: string }[]>([])
+
+  const fetchData = useCallback(async () => {
+    try {
+      const params: SignalScanRequest = {}
+      if (activeTab !== 'all') {
+        params.signalType = activeTab as 'buy' | 'sell' | 'hold'
+      }
+      if (strategyFilter) {
+        params.strategyIds = [strategyFilter]
+      }
+
+      const [signalsRes, statsRes] = await Promise.all([
+        signalsService.list(params),
+        signalsService.getStats(),
+      ])
+
+      if (signalsRes.data) {
+        setSignals(signalsRes.data)
+      }
+      if (statsRes.data) {
+        setStats(statsRes.data)
+      }
+    } catch {
+      setSignals([])
+      setStats(null)
+    } finally {
+      setLoading(false)
+    }
+  }, [activeTab, strategyFilter])
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const [signalsRes, statsRes] = await Promise.all([
-          api.get<Signal[]>('/signals?limit=50'),
-          api.get<SignalStats>('/signals/stats/summary'),
-        ])
-        setSignals(signalsRes)
-        setStats(statsRes)
-      } catch (e) {
-        console.error('Signals fetch error:', e)
-      } finally {
-        setLoading(false)
-      }
-    }
     fetchData()
-  }, [])
+  }, [fetchData])
 
-  const filteredSignals = signals.filter((signal) => {
-    const matchesSearch = signal.stock_code.includes(searchQuery)
-    const matchesType = typeFilter === 'all' ? true : signal.signal_type.includes(typeFilter)
-    return matchesSearch && matchesType
-  })
+  useEffect(() => {
+    const uniqueStrategies = Array.from(
+      new Map(signals.map((s) => [s.strategyId, s.strategyName])).entries()
+    )
+    setStrategyOptions([
+      { value: '', label: '全部策略' },
+      ...uniqueStrategies.map(([id, name]) => ({ value: id, label: name })),
+    ])
+  }, [signals])
 
   const handleScan = async () => {
-    setIsScanning(true)
+    setScanning(true)
     try {
-      await api.post('/signals/scan', {})
-      const res = await api.get<Signal[]>('/signals?limit=50')
-      setSignals(res)
-    } catch (e) {
-      console.error('Scan error:', e)
+      const scanReq: SignalScanRequest = {}
+      if (activeTab !== 'all') {
+        scanReq.signalType = activeTab as 'buy' | 'sell' | 'hold'
+      }
+      const res = await signalsService.scan(scanReq)
+      if (res.data) {
+        setSignals(res.data)
+      }
+      const statsRes = await signalsService.getStats()
+      if (statsRes.data) {
+        setStats(statsRes.data)
+      }
+    } catch {
     } finally {
-      setIsScanning(false)
+      setScanning(false)
     }
   }
+
+  const filteredSignals = useMemo(() => {
+    return signals.filter((s) => {
+      if (activeTab !== 'all' && s.signalType !== activeTab) return false
+      if (strategyFilter && s.strategyId !== strategyFilter) return false
+      return true
+    })
+  }, [signals, activeTab, strategyFilter])
+
+  const columns = useMemo(
+    () => [
+      {
+        key: 'triggeredAt',
+        title: '时间',
+        width: '160px',
+        sortable: true,
+        render: (_: string, row: StrategySignal) => (
+          <span className="font-mono text-text-secondary text-xs">
+            {formatDateTime(row.triggeredAt)}
+          </span>
+        ),
+      },
+      {
+        key: 'stockName',
+        title: '股票',
+        width: '140px',
+        sortable: true,
+        render: (_: string, row: StrategySignal) => (
+          <div className="flex flex-col">
+            <span className="text-text-primary font-medium">{row.stockName}</span>
+            <span className="text-text-tertiary text-[10px] font-mono">{row.stockCode}</span>
+          </div>
+        ),
+      },
+      {
+        key: 'signalType',
+        title: '信号类型',
+        width: '100px',
+        align: 'center' as const,
+        render: (value: string) => {
+          const config = SIGNAL_TYPE_BADGE_MAP[value]
+          if (!config) return value
+          return (
+            <GlassBadge variant={config.variant} glow size="sm">
+              <span className="inline-flex items-center gap-1">
+                {config.icon}
+                {config.label}
+              </span>
+            </GlassBadge>
+          )
+        },
+      },
+      {
+        key: 'strength',
+        title: '强度',
+        width: '120px',
+        sortable: true,
+        render: (value: number) => (
+          <div className="flex items-center gap-2">
+            <StrengthBar value={value} size="sm" />
+            <span className="text-text-tertiary text-xs font-mono w-8 text-right">
+              {value}
+            </span>
+          </div>
+        ),
+      },
+      {
+        key: 'price',
+        title: '价格',
+        width: '110px',
+        align: 'right' as const,
+        sortable: true,
+        render: (value: number) => (
+          <span className="font-mono text-text-primary">{formatCurrency(value)}</span>
+        ),
+      },
+      {
+        key: 'strategyName',
+        title: '策略来源',
+        render: (_: string, row: StrategySignal) => (
+          <span className="text-text-secondary text-xs">{row.strategyName}</span>
+        ),
+      },
+    ],
+    []
+  )
 
   if (loading) {
     return (
       <div className="flex items-center justify-center h-96">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent" />
+        <LoadingSpinner size="lg" />
       </div>
     )
   }
@@ -91,126 +205,106 @@ export const SignalsPage: React.FC = () => {
     <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Bell className="w-6 h-6 text-accent" />
+          <Activity className="w-6 h-6 text-accent" />
           <h1 className="text-2xl font-bold text-text-primary">交易信号</h1>
         </div>
-        <GlassButton variant="primary" size="sm" onClick={handleScan} disabled={isScanning}>
-          <ScanLine className={`w-4 h-4 mr-1 ${isScanning ? 'animate-spin' : ''}`} />
-          {isScanning ? '扫描中...' : '扫描信号'}
+        <GlassButton
+          variant="primary"
+          icon={<Radar className="w-4 h-4" />}
+          onClick={handleScan}
+          loading={scanning}
+        >
+          {scanning ? '扫描中...' : '手动扫描'}
         </GlassButton>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <GlassCard className="p-5">
-          <p className="text-xs text-text-tertiary mb-1">总信号数</p>
-          <p className="text-2xl font-mono text-text-primary">{stats?.total || 0}</p>
-        </GlassCard>
-        <GlassCard className="p-5">
-          <p className="text-xs text-text-tertiary mb-1">买入/卖出比</p>
-          <div className="flex items-center gap-2">
-            <p className="text-2xl font-mono text-up">{stats?.buy_count || 0}</p>
-            <span className="text-text-tertiary">/</span>
-            <p className="text-2xl font-mono text-down">{stats?.sell_count || 0}</p>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <GlassCard>
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs text-text-tertiary font-medium">今日信号数</span>
+            <StatusDot status="online" />
           </div>
-          <p className="text-xs text-text-tertiary mt-1">买入占比 {stats?.buy_ratio?.toFixed(1) || 0}%</p>
+          <div className="flex items-baseline gap-2">
+            <span className="text-3xl font-mono font-bold text-text-primary">
+              {stats?.totalSignals ?? 0}
+            </span>
+          </div>
         </GlassCard>
-        <GlassCard className="p-5">
-          <p className="text-xs text-text-tertiary mb-1">今日信号</p>
-          <p className="text-2xl font-mono text-accent">{stats?.today_count || 0}</p>
+
+        <GlassCard>
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs text-text-tertiary font-medium">买入信号</span>
+            <StatusDot status="online" />
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-3xl font-mono font-bold text-up">
+              {stats?.buySignals ?? 0}
+            </span>
+            <TrendingUp className="w-4 h-4 text-up" />
+          </div>
         </GlassCard>
-        <GlassCard className="p-5">
-          <p className="text-xs text-text-tertiary mb-1">本周信号</p>
-          <p className="text-2xl font-mono text-text-primary">{stats?.week_count || 0}</p>
+
+        <GlassCard>
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs text-text-tertiary font-medium">卖出信号</span>
+            <StatusDot status="error" />
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-3xl font-mono font-bold text-down">
+              {stats?.sellSignals ?? 0}
+            </span>
+            <TrendingDown className="w-4 h-4 text-down" />
+          </div>
+        </GlassCard>
+
+        <GlassCard>
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs text-text-tertiary font-medium">平均强度</span>
+            <StatusDot status="warning" />
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-3xl font-mono font-bold text-warning">
+              {stats?.avgStrength != null ? formatNumber(stats.avgStrength, 1) : '-'}
+            </span>
+            <BarChart3 className="w-4 h-4 text-warning" />
+          </div>
         </GlassCard>
       </div>
 
-      {/* Filters */}
-      <GlassCard className="p-4">
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary" />
-            <GlassInput
-              value={searchQuery}
-              onChange={setSearchQuery}
-              placeholder="搜索股票代码"
-              className="pl-9 w-48"
+      <GlassCard
+        header={
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <GlassTabs
+              tabs={SIGNAL_TYPE_TABS}
+              activeKey={activeTab}
+              onChange={setActiveTab}
+              size="sm"
             />
-          </div>
-
-          <div className="flex items-center gap-2">
-            <Filter className="w-4 h-4 text-text-tertiary" />
-            <span className="text-sm text-text-tertiary">类型:</span>
-            <div className="flex rounded-glass-sm overflow-hidden border border-glass-border">
-              {(['all', 'buy', 'sell'] as const).map((type) => (
-                <button
-                  key={type}
-                  onClick={() => setTypeFilter(type)}
-                  className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                    typeFilter === type
-                      ? 'bg-accent/20 text-accent'
-                      : 'text-text-tertiary hover:text-text-primary'
-                  }`}
-                >
-                  {type === 'all' ? '全部' : type === 'buy' ? '买入' : '卖出'}
-                </button>
-              ))}
+            <div className="w-48">
+              <GlassSelect
+                options={strategyOptions}
+                value={strategyFilter}
+                onChange={setStrategyFilter}
+                placeholder="全部策略"
+              />
             </div>
           </div>
-        </div>
+        }
+      >
+        {filteredSignals.length > 0 ? (
+          <GlassTable
+            columns={columns}
+            data={filteredSignals}
+            rowKey="id"
+            compact
+          />
+        ) : (
+          <div className="flex flex-col items-center justify-center py-16 text-text-tertiary">
+            <Radar className="w-10 h-10 mb-3 opacity-30" />
+            <span className="text-sm">暂无信号数据</span>
+          </div>
+        )}
       </GlassCard>
-
-      {/* Signal List */}
-      <div className="space-y-3">
-        {filteredSignals.map((signal) => {
-          const isBuy = signal.signal_type.includes('buy')
-          return (
-            <GlassCard key={signal.id} className="p-5">
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-2">
-                    <span className="font-mono text-sm font-semibold text-text-primary">
-                      {signal.stock_code}
-                    </span>
-                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${isBuy ? 'bg-up/10 text-up' : 'bg-down/10 text-down'}`}>
-                      {isBuy ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
-                      {signal.signal_type === 'strong_buy' ? '强烈买入' : isBuy ? '买入' : '卖出'}
-                    </span>
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-accent/10 text-xs text-accent">
-                      <Zap className="w-3 h-3" />
-                      强度 {signal.signal_strength}/100
-                    </span>
-                  </div>
-
-                  <p className="text-sm text-text-secondary mb-2">{signal.description}</p>
-
-                  <div className="flex items-center gap-4 text-xs text-text-tertiary">
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      {new Date(signal.date).toLocaleString('zh-CN')}
-                    </span>
-                    <span className="font-mono">触发价 ¥{parseFloat(signal.price).toFixed(2)}</span>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-1">
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <div
-                      key={i}
-                      className={`w-2 h-6 rounded-full ${
-                        i < Math.round(signal.signal_strength / 20)
-                          ? isBuy ? 'bg-up' : 'bg-down'
-                          : 'bg-glass-bg-hover'
-                      }`}
-                    />
-                  ))}
-                </div>
-              </div>
-            </GlassCard>
-          )
-        })}
-        {filteredSignals.length === 0 && <p className="text-text-tertiary text-center py-12">暂无信号</p>}
-      </div>
     </div>
   )
 }
