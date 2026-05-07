@@ -22,19 +22,7 @@ async def list_portfolios(
 ):
     service = PortfolioService(db)
     portfolios = service.get_portfolios(current_user.id)
-
-    result = []
-    for portfolio in portfolios:
-        stats = service.calculate_portfolio_stats(portfolio.id, current_user.id)
-        portfolio_data = PortfolioResponse.model_validate(portfolio)
-        portfolio_data.total_market_value = stats["total_market_value"]
-        portfolio_data.total_cost = stats["total_cost"]
-        portfolio_data.total_profit_loss = stats["total_profit_loss"]
-        portfolio_data.total_profit_loss_pct = stats["total_profit_loss_pct"]
-        portfolio_data.holdings_count = stats["holdings_count"]
-        result.append(portfolio_data)
-
-    return result
+    return [PortfolioResponse.model_validate(p) for p in portfolios]
 
 
 @router.post("", response_model=PortfolioResponse, status_code=201)

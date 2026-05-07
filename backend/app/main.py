@@ -1,9 +1,7 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from app.core.config import get_settings
-from app.api.v1 import auth, users, market, portfolio, signals, strategies, backtest, news, push, ws
-import traceback
+from app.api.v1 import auth, users, portfolio, market, news, signals, strategies, backtest, push
 
 settings = get_settings()
 
@@ -12,14 +10,6 @@ app = FastAPI(
     description="智能股票量化交易平台 API",
     version="1.0.0",
 )
-
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    traceback.print_exc()
-    return JSONResponse(
-        status_code=500,
-        content={"detail": str(exc), "traceback": traceback.format_exc()}
-    )
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,7 +28,6 @@ app.include_router(signals.router, prefix="/api/v1/signals", tags=["signals"])
 app.include_router(strategies.router, prefix="/api/v1/strategies", tags=["strategies"])
 app.include_router(backtest.router, prefix="/api/v1/backtest", tags=["backtest"])
 app.include_router(push.router, prefix="/api/v1/push", tags=["push"])
-app.include_router(ws.router, tags=["websocket"])
 
 
 @app.get("/health")

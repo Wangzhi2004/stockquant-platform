@@ -6,7 +6,6 @@ from app.schemas.user import UserCreate, UserLogin, Token, UserResponse
 from app.services.user_service import UserService
 from app.core.security import create_access_token
 from app.core.config import get_settings
-from app.core.exceptions import AuthenticationError
 from app.api.deps import get_current_user
 
 router = APIRouter()
@@ -32,7 +31,7 @@ async def login(login_data: UserLogin, db: Session = Depends(get_db)):
 
 
 @router.post("/refresh", response_model=Token)
-async def refresh_token(current_user=Depends(get_current_user)):
+async def refresh_token(current_user = Depends(get_current_user)):
     access_token = create_access_token(
         data={"sub": str(current_user.id)},
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)

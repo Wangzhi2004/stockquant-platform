@@ -1,14 +1,15 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import Column, String, ForeignKey, Numeric, DateTime, Integer, Enum, Boolean, Text
-from app.models.base import Base, GUID
+from sqlalchemy.dialects.postgresql import UUID
+from app.models.base import Base
 
 
 class StrategySignal(Base):
     __tablename__ = "strategy_signals"
     
-    id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    strategy_id = Column(GUID, ForeignKey("strategy_configs.id"), nullable=False)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    strategy_id = Column(UUID(as_uuid=True), ForeignKey("strategy_configs.id"), nullable=False)
     stock_code = Column(String(10), nullable=False)
     signal_type = Column(Enum("buy", "sell", "strong_buy", "strong_sell", "hold", name="signal_type"), nullable=False)
     signal_strength = Column(Integer, default=1)

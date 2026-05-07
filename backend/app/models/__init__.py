@@ -7,3 +7,5 @@ from app.models.signal import StrategySignal
 from app.models.strategy import StrategyConfig
 from app.models.backtest import BacktestJob
 from app.models.push import PushConfig, PushLog
+
+User.portfolios = []

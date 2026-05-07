@@ -1,11 +1,9 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 from typing import Optional, List
 from decimal import Decimal
 
 
 class StockInfo(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
     code: str
     name: str
     exchange: str
@@ -19,8 +17,6 @@ class StockInfo(BaseModel):
 
 
 class KlineData(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
     date: str
     open: Decimal
     high: Decimal
@@ -32,8 +28,6 @@ class KlineData(BaseModel):
 
 
 class IndexQuote(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
     code: str
     name: str
     price: Decimal
@@ -42,8 +36,6 @@ class IndexQuote(BaseModel):
 
 
 class HotSector(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
     name: str
     change_pct: Decimal
     leading_stock: Optional[str] = None
