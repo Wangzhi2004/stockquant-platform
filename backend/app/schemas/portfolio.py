@@ -91,3 +91,22 @@ class PortfolioResponse(PortfolioBase):
 class PortfolioDetailResponse(PortfolioResponse):
     holdings: List[HoldingResponse]
     transactions: List[TransactionResponse]
+
+
+class HoldingImportItem(BaseModel):
+    stock_code: str
+    stock_name: str
+    cost_price: Decimal
+    quantity: int
+    buy_date: date
+
+
+class HoldingImportRequest(BaseModel):
+    holdings: List[HoldingImportItem]
+
+
+class HoldingImportResponse(BaseModel):
+    success_count: int
+    failed_count: int
+    errors: List[str] = []
+    imported: List[HoldingResponse] = []

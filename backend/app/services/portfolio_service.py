@@ -5,7 +5,7 @@ from app.models.portfolio import Portfolio, Holding, Transaction
 from app.models.stock import Stock
 from app.schemas.portfolio import (
     PortfolioCreate, PortfolioUpdate, HoldingCreate, HoldingUpdate,
-    TransactionCreate
+    TransactionCreate, HoldingImportItem, HoldingImportResponse
 )
 from app.core.exceptions import NotFoundError, ValidationError
 
@@ -113,3 +113,40 @@ class PortfolioService:
     def get_transactions(self, portfolio_id: UUID, user_id: UUID) -> List[Transaction]:
         portfolio = self.get_portfolio(portfolio_id, user_id)
         return portfolio.transactions
+    
+    def import_holdings(self, portfolio_id: UUID, user_id: UUID, items: List[HoldingImportItem]) -> HoldingImportResponse:
+        portfolio = self.get_portfolio(portfolio_id, user_id)
+        imported = []
+        errors = []
+        
+        for idx, item in enumerate(items):
+            try:
+                stock = self.db.query(Stock).filter(Stock.code == item.stock_code).first()
+                if not stock:
+                    errors.append(f"Row {idx+1}: Stock {item.stock_code} not found")
+                    continue
+                
+                holding = Holding(
+                    portfolio_id=portfolio_id,
+                    stock_code=item.stock_code,
+                    stock_name=item.stock_name or stock.name,
+                    cost_price=item.cost_price,
+                    quantity=item.quantity,
+                    buy_date=item.buy_date,
+                )
+                self.db.add(holding)
+                self.db.flush()
+                imported.append(holding)
+            except Exception as e:
+                errors.append(f"Row {idx+1}: {str(e)}")
+        
+        self.db.commit()
+        for h in imported:
+            self.db.refresh(h)
+        
+        return HoldingImportResponse(
+            success_count=len(imported),
+            failed_count=len(errors),
+            errors=errors,
+            imported=imported,
+        )

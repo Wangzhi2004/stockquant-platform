@@ -7,7 +7,8 @@ from app.models.user import User
 from app.schemas.portfolio import (
     PortfolioCreate, PortfolioUpdate, PortfolioResponse, PortfolioDetailResponse,
     HoldingCreate, HoldingUpdate, HoldingResponse,
-    TransactionCreate, TransactionResponse
+    TransactionCreate, TransactionResponse,
+    HoldingImportRequest, HoldingImportResponse,
 )
 from app.services.portfolio_service import PortfolioService
 from app.api.deps import get_current_user
@@ -137,3 +138,15 @@ async def add_transaction(
     service = PortfolioService(db)
     transaction = service.add_transaction(portfolio_id, current_user.id, data)
     return transaction
+
+
+@router.post("/{portfolio_id}/holdings/import", response_model=HoldingImportResponse)
+async def import_holdings(
+    portfolio_id: UUID,
+    data: HoldingImportRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    service = PortfolioService(db)
+    result = service.import_holdings(portfolio_id, current_user.id, data.holdings)
+    return result

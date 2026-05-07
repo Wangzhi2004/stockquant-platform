@@ -2,7 +2,7 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 from app.models.base import get_db
-from app.schemas.user import UserCreate, UserLogin, Token, UserResponse
+from app.schemas.user import UserCreate, UserLogin, Token, UserResponse, PasswordResetRequest, PasswordResetConfirm
 from app.services.user_service import UserService
 from app.core.security import create_access_token
 from app.core.config import get_settings
@@ -37,3 +37,25 @@ async def refresh_token(current_user = Depends(get_current_user)):
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     )
     return {"access_token": access_token, "token_type": "bearer"}
+
+
+@router.post("/forgot-password")
+async def forgot_password(
+    request: PasswordResetRequest,
+    db: Session = Depends(get_db),
+):
+    service = UserService(db)
+    token = service.generate_reset_token(request.email)
+    if token:
+        return {"message": "Password reset link sent", "token": token}
+    return {"message": "If email exists, reset link will be sent"}
+
+
+@router.post("/reset-password")
+async def reset_password(
+    request: PasswordResetConfirm,
+    db: Session = Depends(get_db),
+):
+    service = UserService(db)
+    service.reset_password(request.token, request.new_password)
+    return {"message": "Password reset successfully"}

@@ -1,10 +1,14 @@
 from typing import List, Optional
 from uuid import UUID
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from app.models.user import User
-from app.schemas.user import UserCreate, UserUpdate, PasswordChange
-from app.core.security import get_password_hash, verify_password
+from app.schemas.user import UserCreate, UserUpdate, PasswordChange, PasswordResetRequest
+from app.core.security import get_password_hash, verify_password, create_access_token
 from app.core.exceptions import AuthenticationError, NotFoundError, ValidationError
+from app.core.config import get_settings
+
+settings = get_settings()
 
 
 class UserService:
@@ -63,6 +67,34 @@ class UserService:
             raise AuthenticationError("Invalid old password")
         
         user.hashed_password = get_password_hash(password_data.new_password)
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+    
+    def generate_reset_token(self, email: str) -> str:
+        user = self.get_by_email(email)
+        if not user:
+            return ""
+        
+        token = create_access_token(
+            data={"sub": str(user.id), "purpose": "password_reset"},
+            expires_delta=timedelta(minutes=30),
+        )
+        return token
+    
+    def reset_password(self, token: str, new_password: str) -> User:
+        from app.core.security import decode_access_token
+        
+        payload = decode_access_token(token)
+        if not payload or payload.get("purpose") != "password_reset":
+            raise ValidationError("Invalid or expired reset token")
+        
+        user_id = payload.get("sub")
+        user = self.get_by_id(UUID(user_id))
+        if not user:
+            raise NotFoundError("User not found")
+        
+        user.hashed_password = get_password_hash(new_password)
         self.db.commit()
         self.db.refresh(user)
         return user
