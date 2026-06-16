@@ -1,154 +1,157 @@
-import React, { useEffect, useState } from 'react'
-import { GlassCard } from '@/components/glass/GlassCard'
-import { GlassButton } from '@/components/glass/GlassButton'
-import { PortfolioChart } from '@/components/charts'
-import { TrendingUp, TrendingDown, Activity, Bell, Zap, Newspaper } from 'lucide-react'
-import { api } from '@/services/api'
+import React, { useEffect, useState, useMemo } from 'react'
+import { GlassCard, GlassBadge, GlassButton } from '@/components/glass'
+import { PriceDisplay, ChangeBadge, StrengthBar, LoadingSpinner } from '@/components/common'
+import { PortfolioChart, Sparkline, DonutChart } from '@/components/charts'
+import { usePortfolio, useMarket, useWebSocket } from '@/hooks'
+import { signalsService, newsService } from '@/services'
+import { formatCurrency, cn } from '@/utils/formatters'
+import { Wallet, Zap, Newspaper, Bell, ArrowUpRight, ArrowDownRight } from 'lucide-react'
 import { Link } from 'react-router-dom'
-
-interface IndexQuote {
-  code: string
-  name: string
-  price: string
-  change: string
-  change_pct: string
-}
-
-interface Signal {
-  stock_code: string
-  signal_type: string
-  signal_strength: number
-  price: string
-  description: string
-}
-
-interface NewsItem {
-  title: string
-  source: string
-  sentiment: string | null
-  opportunity_score: string | null
-  related_stocks: string | null
-}
+import type { StrategySignal, OpportunityScore } from '@/types'
 
 export const DashboardPage: React.FC = () => {
-  const [indices, setIndices] = useState<IndexQuote[]>([])
-  const [signals, setSignals] = useState<Signal[]>([])
-  const [news, setNews] = useState<NewsItem[]>([])
-  const [portfolioData, setPortfolioData] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  const { stats, holdings, loading: portfolioLoading } = usePortfolio()
+  const { indices, fetchIndices } = useMarket()
+  const [signals, setSignals] = useState<StrategySignal[]>([])
+  const [opportunities, setOpportunities] = useState<OpportunityScore[]>([])
+  const [dataLoading, setDataLoading] = useState(true)
+  const [sparklineData, setSparklineData] = useState<Record<string, number[]>>({})
+
+  useWebSocket({
+    url: 'ws://localhost:8000/ws/indices',
+    onMessage: (data) => {
+      if (data.type === 'indices_update') {
+        fetchIndices()
+      }
+    },
+  })
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [indicesRes, signalsRes, newsRes] = await Promise.all([
-          api.get<IndexQuote[]>('/market/indices'),
-          api.get<Signal[]>('/signals?limit=5'),
-          api.get<NewsItem[]>('/news?limit=5'),
+        const [signalsRes, oppRes] = await Promise.all([
+          signalsService.list({ pageSize: 5 }),
+          newsService.getOpportunities({ pageSize: 3 }),
         ])
-        setIndices(indicesRes)
-        setSignals(signalsRes)
-        setNews(newsRes)
-
-        // Mock portfolio history for chart
-        const mockData = Array.from({ length: 30 }, (_, i) => {
-          const date = new Date()
-          date.setDate(date.getDate() - (29 - i))
-          const base = 1000000
-          const drift = Math.sin(i * 0.3) * 50000 + i * 2000
-          return {
-            date: date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }),
-            value: Math.round(base + drift + Math.random() * 10000),
-            benchmark: Math.round(base + drift * 0.6 + Math.random() * 5000),
-          }
-        })
-        setPortfolioData(mockData)
-      } catch (e) {
-        console.error('Dashboard fetch error:', e)
+        setSignals(signalsRes.data)
+        setOpportunities(oppRes.data)
+      } catch {
       } finally {
-        setLoading(false)
+        setDataLoading(false)
       }
     }
-
     fetchData()
-
-    // WebSocket for real-time indices
-    const ws = new WebSocket('ws://localhost:8000/ws/indices')
-    ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data)
-      if (msg.type === 'indices_update') {
-        setIndices(msg.data)
-      }
-    }
-    ws.onerror = () => {}
-
-    return () => ws.close()
   }, [])
 
-  const totalAssets = 1234567
-  const dailyPnL = 12345
-  const dailyPnLPct = 1.02
+  useEffect(() => {
+    const data: Record<string, number[]> = {}
+    indices.forEach((idx) => {
+      const base = idx.currentPrice
+      data[idx.code] = Array.from({ length: 20 }, (_, i) =>
+        base + (Math.random() - 0.5) * base * 0.02 * (i + 1)
+      )
+    })
+    setSparklineData(data)
+  }, [indices])
 
-  if (loading) {
+  const portfolioChartData = useMemo(() => {
+    const base = stats?.totalValue || 1000000
+    return Array.from({ length: 30 }, (_, i) => {
+      const date = new Date()
+      date.setDate(date.getDate() - (29 - i))
+      const drift = Math.sin(i * 0.3) * 50000 + i * 2000
+      return {
+        date: date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }),
+        value: Math.round(base + drift + Math.random() * 10000),
+        benchmark: Math.round(base + drift * 0.6 + Math.random() * 5000),
+      }
+    })
+  }, [stats?.totalValue])
+
+  const donutSegments = useMemo(() => {
+    if (!holdings.length) return []
+    const colors = ['#5b8def', '#00e5a0', '#ffb347', '#ff4567', '#a855f7', '#06b6d4']
+    return holdings.slice(0, 6).map((h, i) => ({
+      label: h.stockName,
+      value: h.marketValue || h.quantity * h.avgCost,
+      color: colors[i % colors.length],
+    }))
+  }, [holdings])
+
+  const totalAssets = stats?.totalValue || 0
+  const dailyPnL = stats?.dailyProfitLoss || 0
+  const dailyPnLPct = stats?.dailyProfitLossPercent || 0
+
+  if (portfolioLoading || dataLoading) {
     return (
       <div className="flex items-center justify-center h-96">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent" />
+        <LoadingSpinner size="lg" />
       </div>
     )
   }
 
+  const signalTypeMap: Record<string, { label: string; variant: 'up' | 'down' | 'accent' | 'warning' | 'default' }> = {
+    buy: { label: '买入', variant: 'up' },
+    sell: { label: '卖出', variant: 'down' },
+    hold: { label: '持有', variant: 'warning' },
+  }
+
+  const recommendationMap: Record<string, { label: string; variant: 'up' | 'down' | 'accent' | 'warning' | 'default' }> = {
+    strong_buy: { label: '强烈买入', variant: 'up' },
+    buy: { label: '买入', variant: 'up' },
+    hold: { label: '持有', variant: 'warning' },
+    sell: { label: '卖出', variant: 'down' },
+    strong_sell: { label: '强烈卖出', variant: 'down' },
+  }
+
   return (
     <div className="space-y-6 p-6">
-      {/* Hero Card */}
-      <GlassCard className="p-8 relative overflow-hidden">
+      <GlassCard
+        className="p-8 relative overflow-hidden"
+        glow={dailyPnL >= 0 ? 'up' : 'down'}
+      >
         <div className="absolute inset-0 bg-gradient-to-r from-accent/5 via-transparent to-up/5" />
         <div className="relative z-10">
           <div className="flex justify-between items-start">
             <div>
-              <p className="text-text-tertiary text-sm mb-2">总资产</p>
-              <h1 className="text-4xl font-mono text-text-primary">
-                ¥{totalAssets.toLocaleString()}<span className="text-2xl opacity-60">.89</span>
-              </h1>
+              <div className="flex items-center gap-2 mb-2">
+                <Wallet className="w-5 h-5 text-accent" />
+                <p className="text-text-tertiary text-sm">总资产</p>
+              </div>
+              <PriceDisplay value={totalAssets} size="xl" />
             </div>
             <div className="text-right">
               <p className="text-text-tertiary text-sm mb-2">当日盈亏</p>
-              <div className={`flex items-center gap-2 ${dailyPnL >= 0 ? 'text-up' : 'text-down'}`}>
-                {dailyPnL >= 0 ? <TrendingUp className="w-5 h-5" /> : <TrendingDown className="w-5 h-5" />}
-                <span className="text-2xl font-mono">{dailyPnL >= 0 ? '+' : ''}¥{dailyPnL.toLocaleString()}</span>
-                <span className="text-sm">({dailyPnL >= 0 ? '+' : ''}{dailyPnLPct.toFixed(2)}%)</span>
+              <div className="flex items-center gap-3 justify-end">
+                <PriceDisplay value={Math.abs(dailyPnL)} change={dailyPnL} size="lg" />
+                <ChangeBadge value={dailyPnLPct} size="md" glow />
               </div>
             </div>
           </div>
         </div>
       </GlassCard>
 
-      {/* Index Cards - Real-time */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {indices.slice(0, 3).map((idx) => {
-          const isUp = parseFloat(idx.change_pct) >= 0
-          return (
-            <GlassCard key={idx.code} className="p-6">
-              <div className="flex justify-between items-start mb-4">
-                <span className="text-text-tertiary text-sm">{idx.name}</span>
-                <Activity className="w-4 h-4 text-text-tertiary" />
-              </div>
-              <div className="text-2xl font-mono text-text-primary mb-2">{parseFloat(idx.price).toLocaleString()}</div>
-              <div className={`flex items-center gap-1 ${isUp ? 'text-up' : 'text-down'}`}>
-                {isUp ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-                <span>{isUp ? '+' : ''}{idx.change_pct}%</span>
-              </div>
-            </GlassCard>
-          )
-        })}
+        {indices.slice(0, 3).map((idx) => (
+          <GlassCard key={idx.code} className="p-5" hover>
+            <div className="flex justify-between items-start mb-3">
+              <span className="text-text-tertiary text-sm">{idx.name}</span>
+              <Sparkline data={sparklineData[idx.code] || []} width={80} height={28} />
+            </div>
+            <PriceDisplay value={idx.currentPrice} change={idx.change} size="lg" />
+            <div className="mt-2">
+              <ChangeBadge value={idx.changePercent} size="sm" />
+            </div>
+          </GlassCard>
+        ))}
       </div>
 
-      {/* Portfolio Chart */}
       <GlassCard className="p-6">
         <h3 className="text-lg font-semibold text-text-primary mb-4">收益曲线</h3>
-        <PortfolioChart data={portfolioData} height={300} />
+        <PortfolioChart data={portfolioChartData} height={300} />
       </GlassCard>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Latest Signals */}
         <GlassCard className="p-6">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
@@ -159,18 +162,19 @@ export const DashboardPage: React.FC = () => {
           </div>
           <div className="space-y-3">
             {signals.map((s) => {
-              const isBuy = s.signal_type.includes('buy')
+              const mapped = signalTypeMap[s.signalType] || { label: s.signalType, variant: 'default' as const }
               return (
-                <div key={s.stock_code + s.signal_type} className="flex items-center justify-between py-2 border-b border-glass-border/50 last:border-0">
-                  <div>
-                    <span className="font-mono text-sm text-text-primary">{s.stock_code}</span>
-                    <p className="text-xs text-text-tertiary mt-0.5">{s.description}</p>
+                <div key={s.id} className="flex items-center justify-between py-2 border-b border-white/[0.04] last:border-0">
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono text-sm text-text-primary">{s.stockCode}</span>
+                    <GlassBadge variant={mapped.variant} size="sm">
+                      {s.signalType === 'buy' ? <ArrowUpRight className="w-3 h-3 mr-0.5" /> : s.signalType === 'sell' ? <ArrowDownRight className="w-3 h-3 mr-0.5" /> : null}
+                      {mapped.label}
+                    </GlassBadge>
                   </div>
-                  <div className="text-right">
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${isBuy ? 'bg-up/10 text-up' : 'bg-down/10 text-down'}`}>
-                      {s.signal_type === 'strong_buy' ? '强烈买入' : s.signal_type === 'buy' ? '买入' : s.signal_type === 'sell' ? '卖出' : '持有'}
-                    </span>
-                    <p className="text-xs text-text-tertiary mt-1">强度 {s.signal_strength}</p>
+                  <div className="flex items-center gap-3">
+                    <StrengthBar value={s.strength * 20} size="sm" />
+                    <span className="text-xs text-text-tertiary font-mono">{s.strength.toFixed(1)}</span>
                   </div>
                 </div>
               )
@@ -179,7 +183,6 @@ export const DashboardPage: React.FC = () => {
           </div>
         </GlassCard>
 
-        {/* Latest News */}
         <GlassCard className="p-6">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
@@ -189,28 +192,75 @@ export const DashboardPage: React.FC = () => {
             <Link to="/news" className="text-sm text-accent hover:underline">查看全部</Link>
           </div>
           <div className="space-y-3">
-            {news.map((n, i) => {
-              const sentiment = n.sentiment || 'neutral'
-              const score = parseFloat(n.opportunity_score || '0')
+            {opportunities.map((opp) => {
+              const rec = recommendationMap[opp.recommendation] || { label: opp.recommendation, variant: 'default' as const }
               return (
-                <div key={i} className="py-2 border-b border-glass-border/50 last:border-0">
-                  <p className="text-sm text-text-primary line-clamp-2">{n.title}</p>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="text-xs text-text-tertiary">{n.source}</span>
-                    {n.related_stocks && <span className="text-xs font-mono text-accent">{n.related_stocks}</span>}
-                    <span className={`text-xs ${sentiment === 'positive' ? 'text-up' : sentiment === 'negative' ? 'text-down' : 'text-text-tertiary'}`}>
-                      机会分 {score.toFixed(0)}
-                    </span>
+                <div key={opp.stockCode} className="py-2 border-b border-white/[0.04] last:border-0">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-sm text-text-primary">{opp.stockCode}</span>
+                      <span className="text-sm text-text-secondary">{opp.stockName}</span>
+                    </div>
+                    <GlassBadge variant={rec.variant} size="sm">{rec.label}</GlassBadge>
+                  </div>
+                  <div className="flex items-center gap-3 mt-1">
+                    <div className="flex-1 h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
+                      <div
+                        className={cn(
+                          'h-full rounded-full transition-all',
+                          opp.score >= 70 ? 'bg-up' : opp.score >= 40 ? 'bg-warning' : 'bg-down'
+                        )}
+                        style={{ width: `${opp.score}%` }}
+                      />
+                    </div>
+                    <span className="text-xs font-mono text-text-tertiary">{opp.score}分</span>
                   </div>
                 </div>
               )
             })}
-            {news.length === 0 && <p className="text-text-tertiary text-sm">暂无新闻</p>}
+            {opportunities.length === 0 && <p className="text-text-tertiary text-sm">暂无机会</p>}
           </div>
         </GlassCard>
       </div>
 
-      {/* Quick Actions */}
+      <GlassCard className="p-6">
+        <div className="flex items-center gap-2 mb-4">
+          <Wallet className="w-5 h-5 text-accent" />
+          <h3 className="text-lg font-semibold text-text-primary">持仓概览</h3>
+        </div>
+        {donutSegments.length > 0 ? (
+          <div className="flex items-center gap-8">
+            <DonutChart segments={donutSegments} size={140} strokeWidth={16} />
+            <div className="flex-1 space-y-2">
+              {stats && (
+                <>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-text-tertiary">持仓数量</span>
+                    <span className="text-text-primary font-mono">{stats.holdingsCount}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-text-tertiary">总市值</span>
+                    <span className="text-text-primary font-mono">{formatCurrency(stats.totalValue)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-text-tertiary">总成本</span>
+                    <span className="text-text-primary font-mono">{formatCurrency(stats.totalCost)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-text-tertiary">总盈亏</span>
+                    <span className={cn('font-mono', stats.totalProfitLoss >= 0 ? 'text-up' : 'text-down')}>
+                      {formatCurrency(stats.totalProfitLoss)}
+                    </span>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        ) : (
+          <p className="text-text-tertiary text-sm">暂无持仓</p>
+        )}
+      </GlassCard>
+
       <div className="flex gap-4">
         <Link to="/signals">
           <GlassButton variant="primary" size="md">

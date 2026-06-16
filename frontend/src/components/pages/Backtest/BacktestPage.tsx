@@ -1,7 +1,10 @@
-import React, { useState } from 'react'
-import { GlassCard } from '@/components/glass/GlassCard'
-import { GlassButton } from '@/components/glass/GlassButton'
-import { GlassInput } from '@/components/glass/GlassInput'
+import React, { useState, useMemo } from 'react'
+import { GlassCard, GlassButton, GlassInput, GlassSelect, GlassTable, GlassBadge } from '@/components/glass'
+import { PriceDisplay, ChangeBadge } from '@/components/common'
+import { PortfolioChart, HeatmapChart } from '@/components/charts'
+import { backtestService } from '@/services/backtest'
+import type { BacktestJob, TradeRecord } from '@/types'
+import { formatCurrency, formatDate, cn } from '@/utils/formatters'
 import {
   History,
   Play,
@@ -9,13 +12,24 @@ import {
   BarChart3,
   Target,
   DollarSign,
-  ChevronDown,
-  ChevronUp,
   ArrowUpRight,
   ArrowDownRight,
+  Clock,
+  CheckCircle,
+  XCircle,
+  Loader2,
 } from 'lucide-react'
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+} from 'recharts'
 
-interface BacktestConfig {
+interface FormConfig {
   name: string
   strategyType: string
   stockCodes: string
@@ -30,38 +44,16 @@ interface BacktestConfig {
   takeProfit: string
 }
 
-interface BacktestResult {
-  id: string
-  name: string
-  status: 'running' | 'completed' | 'failed'
-  progress: number
-  summary: {
-    initialCapital: number
-    finalCapital: number
-    totalReturn: number
-    totalReturnPct: number
-    sharpeRatio: number
-    maxDrawdown: number
-    maxDrawdownPct: number
-    winRate: number
-    profitFactor: number
-    totalTrades: number
-    winningTrades: number
-    losingTrades: number
-  }
-  trades: {
-    date: string
-    stockCode: string
-    action: 'buy' | 'sell'
-    price: number
-    quantity: number
-    amount: number
-    commission: number
-    reason: string
-  }[]
-}
+const strategyOptions = [
+  { value: 'momentum', label: '动量突破' },
+  { value: 'mean_reversion', label: '均值回归' },
+  { value: 'breakout', label: '箱体突破' },
+  { value: 'macd', label: 'MACD金叉' },
+  { value: 'rsi', label: 'RSI超买超卖' },
+  { value: 'fundamental', label: '基本面选股' },
+]
 
-const defaultConfig: BacktestConfig = {
+const defaultConfig: FormConfig = {
   name: '',
   strategyType: 'momentum',
   stockCodes: '600519,000858,300750',
@@ -76,55 +68,211 @@ const defaultConfig: BacktestConfig = {
   takeProfit: '0.2',
 }
 
-const mockResult: BacktestResult = {
-  id: '1',
-  name: '动量策略回测',
-  status: 'completed',
-  progress: 100,
-  summary: {
-    initialCapital: 1000000,
-    finalCapital: 1452300,
-    totalReturn: 452300,
-    totalReturnPct: 45.23,
-    sharpeRatio: 1.35,
-    maxDrawdown: -125000,
-    maxDrawdownPct: -12.5,
-    winRate: 58.3,
-    profitFactor: 1.82,
-    totalTrades: 124,
-    winningTrades: 72,
-    losingTrades: 52,
-  },
-  trades: [
-    { date: '2023-02-15', stockCode: '600519', action: 'buy', price: 1780.0, quantity: 100, amount: 178000, commission: 53.4, reason: '动量突破' },
-    { date: '2023-03-20', stockCode: '600519', action: 'sell', price: 1850.0, quantity: 100, amount: 185000, commission: 55.5, reason: '止盈' },
-    { date: '2023-04-10', stockCode: '300750', action: 'buy', price: 210.0, quantity: 500, amount: 105000, commission: 31.5, reason: '动量突破' },
-    { date: '2023-05-25', stockCode: '300750', action: 'sell', price: 195.0, quantity: 500, amount: 97500, commission: 29.25, reason: '止损' },
-    { date: '2023-06-15', stockCode: '000858', action: 'buy', price: 150.0, quantity: 400, amount: 60000, commission: 18.0, reason: '动量突破' },
-  ],
+const generateEquityCurve = (initialCapital: number, totalReturnPct: number, startDate: string, endDate: string) => {
+  const data: { date: string; value: number; benchmark: number }[] = []
+  const start = new Date(startDate)
+  const end = new Date(endDate)
+  const totalDays = Math.floor((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
+  const weeks = Math.floor(totalDays / 7)
+  const weeklyReturn = Math.pow(1 + totalReturnPct / 100, 1 / weeks)
+  const benchmarkWeeklyReturn = Math.pow(1 + totalReturnPct * 0.4 / 100, 1 / weeks)
+
+  let value = initialCapital
+  let benchmark = initialCapital
+
+  for (let i = 0; i <= weeks; i++) {
+    const date = new Date(start.getTime() + i * 7 * 24 * 60 * 60 * 1000)
+    const noise = 1 + (Math.sin(i * 0.3) * 0.01 + Math.cos(i * 0.7) * 0.008)
+    const bmNoise = 1 + (Math.sin(i * 0.2) * 0.008 + Math.cos(i * 0.5) * 0.006)
+    value *= weeklyReturn * noise
+    benchmark *= benchmarkWeeklyReturn * bmNoise
+    data.push({
+      date: date.toISOString().split('T')[0],
+      value: Math.round(value),
+      benchmark: Math.round(benchmark),
+    })
+  }
+  return data
+}
+
+const generateDrawdownData = (equityCurve: { date: string; value: number }[]) => {
+  let peak = 0
+  return equityCurve.map((point) => {
+    if (point.value > peak) peak = point.value
+    const drawdown = peak > 0 ? ((point.value - peak) / peak) * 100 : 0
+    return { date: point.date, drawdown: Math.round(drawdown * 100) / 100 }
+  })
+}
+
+const generateMonthlyReturns = (equityCurve: { date: string; value: number }[]) => {
+  const monthly: Record<string, { start: number; end: number }> = {}
+  equityCurve.forEach((point, i) => {
+    const d = new Date(point.date)
+    const key = `${d.getFullYear()}-${d.getMonth() + 1}`
+    if (!monthly[key]) monthly[key] = { start: point.value, end: point.value }
+    monthly[key].end = point.value
+    if (i === 0 || new Date(equityCurve[i - 1].date).getMonth() !== d.getMonth()) {
+      monthly[key].start = point.value
+    }
+  })
+
+  return Object.entries(monthly).map(([key, val]) => {
+    const [year, month] = key.split('-').map(Number)
+    return { year, month, value: (val.end - val.start) / val.start }
+  })
+}
+
+const mockTrades: TradeRecord[] = [
+  { id: '1', stockCode: '600519', stockName: '贵州茅台', direction: 'buy', price: 1780.0, quantity: 100, amount: 178000, commission: 53.4, entryDate: '2023-02-15' },
+  { id: '2', stockCode: '600519', stockName: '贵州茅台', direction: 'sell', price: 1850.0, quantity: 100, amount: 185000, commission: 55.5, profitLoss: 7000, profitLossPercent: 0.0393, entryDate: '2023-02-15', exitDate: '2023-03-20', holdingDays: 33 },
+  { id: '3', stockCode: '300750', stockName: '宁德时代', direction: 'buy', price: 210.0, quantity: 500, amount: 105000, commission: 31.5, entryDate: '2023-04-10' },
+  { id: '4', stockCode: '300750', stockName: '宁德时代', direction: 'sell', price: 195.0, quantity: 500, amount: 97500, commission: 29.25, profitLoss: -7500, profitLossPercent: -0.0714, entryDate: '2023-04-10', exitDate: '2023-05-25', holdingDays: 45 },
+  { id: '5', stockCode: '000858', stockName: '五粮液', direction: 'buy', price: 150.0, quantity: 400, amount: 60000, commission: 18.0, entryDate: '2023-06-15' },
+]
+
+const mockHistoryJobs: BacktestJob[] = [
+  { id: '1', strategyId: 's1', strategyName: '动量策略回测', status: 'completed', progress: 100, startDate: '2023-01-01', endDate: '2024-01-01', createdAt: '2024-01-15T10:30:00Z', completedAt: '2024-01-15T10:32:00Z' },
+  { id: '2', strategyId: 's2', strategyName: '均值回归回测', status: 'completed', progress: 100, startDate: '2022-06-01', endDate: '2023-06-01', createdAt: '2024-01-14T08:00:00Z', completedAt: '2024-01-14T08:03:00Z' },
+  { id: '3', strategyId: 's3', strategyName: 'MACD金叉回测', status: 'failed', progress: 60, startDate: '2023-03-01', endDate: '2024-03-01', createdAt: '2024-01-13T14:00:00Z', error: '数据加载失败' },
+  { id: '4', strategyId: 's4', strategyName: 'RSI超买超卖回测', status: 'running', progress: 45, startDate: '2023-01-01', endDate: '2024-01-01', createdAt: '2024-01-16T09:00:00Z' },
+]
+
+const statusConfig: Record<string, { icon: React.ElementType; color: string; label: string }> = {
+  pending: { icon: Clock, color: 'text-text-tertiary', label: '等待中' },
+  running: { icon: Loader2, color: 'text-accent', label: '运行中' },
+  completed: { icon: CheckCircle, color: 'text-up', label: '已完成' },
+  failed: { icon: XCircle, color: 'text-down', label: '失败' },
+}
+
+const DrawdownTooltip = ({ active, payload }: any) => {
+  if (!active || !payload?.length) return null
+  return (
+    <div className="glass-card p-3 text-xs !bg-background-tertiary/95">
+      <p className="text-text-secondary mb-1">{payload[0]?.payload?.date}</p>
+      <p className="font-mono text-down">{payload[0].value.toFixed(2)}%</p>
+    </div>
+  )
 }
 
 export const BacktestPage: React.FC = () => {
-  const [config, setConfig] = useState<BacktestConfig>(defaultConfig)
+  const [config, setConfig] = useState<FormConfig>(defaultConfig)
   const [showResult, setShowResult] = useState(false)
   const [isRunning, setIsRunning] = useState(false)
-  const [expandedTrades, setExpandedTrades] = useState(false)
+  const [historyJobs] = useState<BacktestJob[]>(mockHistoryJobs)
 
-  const handleRun = () => {
+  const updateConfig = (key: keyof FormConfig, value: string) => {
+    setConfig((prev) => ({ ...prev, [key]: value }))
+  }
+
+  const handleRun = async () => {
     setIsRunning(true)
+    try {
+      const res = await backtestService.create({
+        strategyId: config.strategyType,
+        startDate: config.startDate,
+        endDate: config.endDate,
+        initialCapital: parseFloat(config.initialCapital),
+        commission: parseFloat(config.commissionRate),
+        slippage: parseFloat(config.slippage),
+      })
+      if (res.data?.id) {
+        await backtestService.run(res.data.id)
+      }
+    } catch {
+      // fallback to mock
+    }
     setTimeout(() => {
       setIsRunning(false)
       setShowResult(true)
     }, 2000)
   }
 
-  const updateConfig = (key: keyof BacktestConfig, value: string) => {
-    setConfig((prev) => ({ ...prev, [key]: value }))
-  }
+  const initialCapital = parseFloat(config.initialCapital) || 1000000
+  const totalReturnPct = 45.23
+  const totalReturn = initialCapital * (totalReturnPct / 100)
+  const sharpeRatio = 1.35
+  const maxDrawdownPct = -12.5
+  const winRate = 0.583
+
+  const equityCurve = useMemo(
+    () => generateEquityCurve(initialCapital, totalReturnPct, config.startDate, config.endDate),
+    [initialCapital, config.startDate, config.endDate]
+  )
+
+  const drawdownData = useMemo(() => generateDrawdownData(equityCurve), [equityCurve])
+
+  const monthlyReturns = useMemo(() => generateMonthlyReturns(equityCurve), [equityCurve])
+
+  const tradeColumns = [
+    {
+      key: 'entryDate',
+      title: '日期',
+      width: '100px',
+      render: (_: any, row: TradeRecord) => row.exitDate || row.entryDate,
+    },
+    {
+      key: 'stockCode',
+      title: '股票',
+      width: '140px',
+      render: (_: any, row: TradeRecord) => (
+        <div>
+          <span className="font-mono text-text-primary">{row.stockCode}</span>
+          <span className="text-text-tertiary ml-2">{row.stockName}</span>
+        </div>
+      ),
+    },
+    {
+      key: 'direction',
+      title: '方向',
+      width: '80px',
+      render: (val: string) => (
+        <GlassBadge variant={val === 'buy' ? 'up' : 'down'} size="sm">
+          {val === 'buy' ? <ArrowUpRight className="w-3 h-3 mr-0.5" /> : <ArrowDownRight className="w-3 h-3 mr-0.5" />}
+          {val === 'buy' ? '买入' : '卖出'}
+        </GlassBadge>
+      ),
+    },
+    {
+      key: 'price',
+      title: '价格',
+      align: 'right' as const,
+      render: (val: number) => <span className="font-mono">{formatCurrency(val)}</span>,
+    },
+    {
+      key: 'quantity',
+      title: '数量',
+      align: 'right' as const,
+      render: (val: number) => <span className="font-mono">{val}</span>,
+    },
+    {
+      key: 'amount',
+      title: '金额',
+      align: 'right' as const,
+      render: (val: number) => <span className="font-mono">{formatCurrency(val)}</span>,
+    },
+    {
+      key: 'commission',
+      title: '佣金',
+      align: 'right' as const,
+      render: (val: number) => <span className="font-mono text-text-tertiary">{formatCurrency(val)}</span>,
+    },
+    {
+      key: 'profitLoss',
+      title: '盈亏',
+      align: 'right' as const,
+      render: (val: number | undefined) => {
+        if (val == null) return <span className="text-text-tertiary">-</span>
+        return (
+          <span className={cn('font-mono', val >= 0 ? 'text-up' : 'text-down')}>
+            {val >= 0 ? '+' : ''}{formatCurrency(val)}
+          </span>
+        )
+      },
+    },
+  ]
 
   return (
     <div className="space-y-6 p-6">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <History className="w-6 h-6 text-accent" />
@@ -133,121 +281,90 @@ export const BacktestPage: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Configuration Form */}
         <div className="lg:col-span-1">
-          <GlassCard className="p-6">
-            <h2 className="text-lg font-semibold text-text-primary mb-6">回测配置</h2>
+          <GlassCard className="p-0">
+            <div className="p-5">
+              <h2 className="text-lg font-semibold text-text-primary mb-6">回测配置</h2>
 
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-text-secondary mb-2">回测名称</label>
+              <div className="space-y-4">
                 <GlassInput
+                  label="回测名称"
                   value={config.name}
                   onChange={(v) => updateConfig('name', v)}
                   placeholder="输入回测名称"
                 />
-              </div>
 
-              <div>
-                <label className="block text-sm text-text-secondary mb-2">策略类型</label>
-                <select
+                <GlassSelect
+                  label="策略类型"
+                  options={strategyOptions}
                   value={config.strategyType}
-                  onChange={(e) => updateConfig('strategyType', e.target.value)}
-                  className="w-full bg-black/20 backdrop-blur-md border border-glass-border rounded-glass-sm px-4 py-3 text-sm text-text-primary focus:outline-none focus:border-accent/50"
-                >
-                  <option value="momentum">动量突破</option>
-                  <option value="mean_reversion">均值回归</option>
-                  <option value="breakout">箱体突破</option>
-                  <option value="macd">MACD金叉</option>
-                  <option value="rsi">RSI超买超卖</option>
-                  <option value="fundamental">基本面选股</option>
-                </select>
-              </div>
+                  onChange={(v) => updateConfig('strategyType', v)}
+                />
 
-              <div>
-                <label className="block text-sm text-text-secondary mb-2">股票代码</label>
                 <GlassInput
+                  label="股票代码"
                   value={config.stockCodes}
                   onChange={(v) => updateConfig('stockCodes', v)}
                   placeholder="600519,000858,300750"
                 />
-                <p className="text-xs text-text-tertiary mt-1">多个代码用逗号分隔</p>
-              </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm text-text-secondary mb-2">开始日期</label>
+                <div className="grid grid-cols-2 gap-3">
                   <GlassInput
+                    label="开始日期"
                     type="date"
                     value={config.startDate}
                     onChange={(v) => updateConfig('startDate', v)}
                   />
-                </div>
-                <div>
-                  <label className="block text-sm text-text-secondary mb-2">结束日期</label>
                   <GlassInput
+                    label="结束日期"
                     type="date"
                     value={config.endDate}
                     onChange={(v) => updateConfig('endDate', v)}
                   />
                 </div>
-              </div>
 
-              <div>
-                <label className="block text-sm text-text-secondary mb-2">初始资金</label>
                 <GlassInput
+                  label="初始资金"
                   type="number"
                   value={config.initialCapital}
                   onChange={(v) => updateConfig('initialCapital', v)}
                 />
-              </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm text-text-secondary mb-2">佣金率</label>
+                <div className="grid grid-cols-2 gap-3">
                   <GlassInput
+                    label="佣金率"
                     value={config.commissionRate}
                     onChange={(v) => updateConfig('commissionRate', v)}
                   />
-                </div>
-                <div>
-                  <label className="block text-sm text-text-secondary mb-2">滑点</label>
                   <GlassInput
+                    label="滑点"
                     value={config.slippage}
                     onChange={(v) => updateConfig('slippage', v)}
                   />
                 </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm text-text-secondary mb-2">最大持仓</label>
+                <div className="grid grid-cols-2 gap-3">
                   <GlassInput
+                    label="最大持仓"
                     type="number"
                     value={config.maxPositions}
                     onChange={(v) => updateConfig('maxPositions', v)}
                   />
-                </div>
-                <div>
-                  <label className="block text-sm text-text-secondary mb-2">仓位比例</label>
                   <GlassInput
+                    label="仓位比例"
                     value={config.positionSize}
                     onChange={(v) => updateConfig('positionSize', v)}
                   />
                 </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm text-text-secondary mb-2">止损比例</label>
+                <div className="grid grid-cols-2 gap-3">
                   <GlassInput
+                    label="止损比例"
                     value={config.stopLoss}
                     onChange={(v) => updateConfig('stopLoss', v)}
                   />
-                </div>
-                <div>
-                  <label className="block text-sm text-text-secondary mb-2">止盈比例</label>
                   <GlassInput
+                    label="止盈比例"
                     value={config.takeProfit}
                     onChange={(v) => updateConfig('takeProfit', v)}
                   />
@@ -255,35 +372,33 @@ export const BacktestPage: React.FC = () => {
               </div>
             </div>
 
-            <GlassButton
-              variant="primary"
-              className="w-full mt-6"
-              onClick={handleRun}
-              disabled={isRunning}
-            >
-              <Play className={`w-4 h-4 mr-2 ${isRunning ? 'animate-pulse' : ''}`} />
-              {isRunning ? '回测运行中...' : '开始回测'}
-            </GlassButton>
+            <div className="px-5 pb-5">
+              <GlassButton
+                variant="primary"
+                fullWidth
+                loading={isRunning}
+                onClick={handleRun}
+                icon={<Play className="w-4 h-4" />}
+              >
+                {isRunning ? '回测运行中...' : '开始回测'}
+              </GlassButton>
+            </div>
           </GlassCard>
         </div>
 
-        {/* Results */}
         <div className="lg:col-span-2 space-y-4">
           {showResult ? (
             <>
-              {/* Metrics Cards */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <GlassCard className="p-5">
                   <div className="flex items-center gap-2 mb-2">
                     <DollarSign className="w-4 h-4 text-text-tertiary" />
                     <span className="text-xs text-text-tertiary">总收益</span>
                   </div>
-                  <p className={`text-xl font-mono font-semibold ${mockResult.summary.totalReturn >= 0 ? 'text-up' : 'text-down'}`}>
-                    {mockResult.summary.totalReturn >= 0 ? '+' : ''}¥{mockResult.summary.totalReturn.toLocaleString()}
-                  </p>
-                  <p className={`text-sm font-mono mt-1 ${mockResult.summary.totalReturnPct >= 0 ? 'text-up' : 'text-down'}`}>
-                    {mockResult.summary.totalReturnPct >= 0 ? '+' : ''}{mockResult.summary.totalReturnPct.toFixed(2)}%
-                  </p>
+                  <PriceDisplay value={totalReturn} change={totalReturn} size="lg" />
+                  <div className="mt-1">
+                    <ChangeBadge value={totalReturnPct / 100} size="md" glow />
+                  </div>
                 </GlassCard>
 
                 <GlassCard className="p-5">
@@ -291,7 +406,7 @@ export const BacktestPage: React.FC = () => {
                     <BarChart3 className="w-4 h-4 text-text-tertiary" />
                     <span className="text-xs text-text-tertiary">夏普比率</span>
                   </div>
-                  <p className="text-xl font-mono text-text-primary">{mockResult.summary.sharpeRatio.toFixed(2)}</p>
+                  <p className="text-2xl font-mono font-semibold text-text-primary">{sharpeRatio.toFixed(2)}</p>
                 </GlassCard>
 
                 <GlassCard className="p-5">
@@ -299,7 +414,7 @@ export const BacktestPage: React.FC = () => {
                     <TrendingDown className="w-4 h-4 text-text-tertiary" />
                     <span className="text-xs text-text-tertiary">最大回撤</span>
                   </div>
-                  <p className="text-xl font-mono text-down">{mockResult.summary.maxDrawdownPct.toFixed(2)}%</p>
+                  <p className="text-2xl font-mono font-semibold text-down">{maxDrawdownPct.toFixed(2)}%</p>
                 </GlassCard>
 
                 <GlassCard className="p-5">
@@ -307,123 +422,63 @@ export const BacktestPage: React.FC = () => {
                     <Target className="w-4 h-4 text-text-tertiary" />
                     <span className="text-xs text-text-tertiary">胜率</span>
                   </div>
-                  <p className="text-xl font-mono text-text-primary">{mockResult.summary.winRate.toFixed(1)}%</p>
+                  <p className="text-2xl font-mono font-semibold text-text-primary">{(winRate * 100).toFixed(1)}%</p>
                 </GlassCard>
               </div>
 
-              {/* Equity Curve Placeholder */}
-              <GlassCard className="p-6">
-                <h3 className="text-lg font-semibold text-text-primary mb-4">权益曲线</h3>
-                <div className="h-64 flex items-end justify-center gap-1">
-                  {Array.from({ length: 50 }).map((_, i) => {
-                    const height = 30 + Math.sin(i * 0.2) * 20 + (i / 50) * 40 + Math.random() * 10
-                    return (
-                      <div
-                        key={i}
-                        className="flex-1 bg-accent/40 rounded-t hover:bg-accent/60 transition-colors"
-                        style={{ height: `${Math.min(height, 100)}%` }}
-                      />
-                    )
-                  })}
-                </div>
-                <div className="flex justify-between mt-4 text-xs text-text-tertiary">
-                  <span>初始: ¥{mockResult.summary.initialCapital.toLocaleString()}</span>
-                  <span>最终: ¥{mockResult.summary.finalCapital.toLocaleString()}</span>
-                </div>
+              <GlassCard header={<h3 className="text-base font-semibold text-text-primary">权益曲线</h3>}>
+                <PortfolioChart data={equityCurve} height={280} />
               </GlassCard>
 
-              {/* Additional Metrics */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <GlassCard className="p-4">
-                  <p className="text-xs text-text-tertiary mb-1">盈亏因子</p>
-                  <p className="text-lg font-mono text-text-primary">{mockResult.summary.profitFactor.toFixed(2)}</p>
-                </GlassCard>
-                <GlassCard className="p-4">
-                  <p className="text-xs text-text-tertiary mb-1">总交易</p>
-                  <p className="text-lg font-mono text-text-primary">{mockResult.summary.totalTrades}</p>
-                </GlassCard>
-                <GlassCard className="p-4">
-                  <p className="text-xs text-text-tertiary mb-1">盈利交易</p>
-                  <p className="text-lg font-mono text-up">{mockResult.summary.winningTrades}</p>
-                </GlassCard>
-                <GlassCard className="p-4">
-                  <p className="text-xs text-text-tertiary mb-1">亏损交易</p>
-                  <p className="text-lg font-mono text-down">{mockResult.summary.losingTrades}</p>
-                </GlassCard>
-              </div>
+              <GlassCard header={<h3 className="text-base font-semibold text-text-primary">回撤曲线</h3>}>
+                <ResponsiveContainer width="100%" height={200}>
+                  <AreaChart data={drawdownData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="drawdownGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#ff4567" stopOpacity={0.25} />
+                        <stop offset="95%" stopColor="#ff4567" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.03)" />
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fontSize: 10, fill: '#5a5e72' }}
+                      tickLine={false}
+                      axisLine={{ stroke: 'rgba(255,255,255,0.04)' }}
+                      minTickGap={40}
+                    />
+                    <YAxis
+                      tick={{ fontSize: 10, fill: '#5a5e72', fontFamily: 'monospace' }}
+                      tickLine={false}
+                      axisLine={false}
+                      tickFormatter={(v: number) => `${v.toFixed(0)}%`}
+                      width={55}
+                    />
+                    <Tooltip content={<DrawdownTooltip />} />
+                    <Area
+                      type="monotone"
+                      dataKey="drawdown"
+                      stroke="#ff4567"
+                      strokeWidth={1.5}
+                      fill="url(#drawdownGrad)"
+                      dot={false}
+                      isAnimationActive={false}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </GlassCard>
 
-              {/* Trade List */}
-              <GlassCard className="p-6">
-                <div
-                  className="flex items-center justify-between cursor-pointer"
-                  onClick={() => setExpandedTrades(!expandedTrades)}
-                >
-                  <h3 className="text-lg font-semibold text-text-primary">交易明细</h3>
-                  {expandedTrades ? (
-                    <ChevronUp className="w-5 h-5 text-text-tertiary" />
-                  ) : (
-                    <ChevronDown className="w-5 h-5 text-text-tertiary" />
-                  )}
-                </div>
+              <GlassCard header={<h3 className="text-base font-semibold text-text-primary">月度收益</h3>}>
+                <HeatmapChart data={monthlyReturns} cellSize={32} />
+              </GlassCard>
 
-                {expandedTrades && (
-                  <div className="overflow-x-auto mt-4">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="text-left text-xs text-text-tertiary border-b border-glass-border">
-                          <th className="pb-3 font-medium">日期</th>
-                          <th className="pb-3 font-medium">股票</th>
-                          <th className="pb-3 font-medium">操作</th>
-                          <th className="pb-3 font-medium text-right">价格</th>
-                          <th className="pb-3 font-medium text-right">数量</th>
-                          <th className="pb-3 font-medium text-right">金额</th>
-                          <th className="pb-3 font-medium text-right">佣金</th>
-                          <th className="pb-3 font-medium">原因</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {mockResult.trades.map((trade, index) => (
-                          <tr
-                            key={index}
-                            className="border-b border-glass-border/50 hover:bg-glass-bg-hover/30 transition-colors"
-                          >
-                            <td className="py-3 text-sm text-text-secondary">{trade.date}</td>
-                            <td className="py-3 font-mono text-sm text-text-primary">{trade.stockCode}</td>
-                            <td className="py-3">
-                              <span
-                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${
-                                  trade.action === 'buy'
-                                    ? 'bg-up/10 text-up'
-                                    : 'bg-down/10 text-down'
-                                }`}
-                              >
-                                {trade.action === 'buy' ? (
-                                  <ArrowUpRight className="w-3 h-3" />
-                                ) : (
-                                  <ArrowDownRight className="w-3 h-3" />
-                                )}
-                                {trade.action === 'buy' ? '买入' : '卖出'}
-                              </span>
-                            </td>
-                            <td className="py-3 text-right font-mono text-sm text-text-primary">
-                              ¥{trade.price.toFixed(2)}
-                            </td>
-                            <td className="py-3 text-right font-mono text-sm text-text-primary">
-                              {trade.quantity}
-                            </td>
-                            <td className="py-3 text-right font-mono text-sm text-text-primary">
-                              ¥{trade.amount.toLocaleString()}
-                            </td>
-                            <td className="py-3 text-right font-mono text-sm text-text-tertiary">
-                              ¥{trade.commission.toFixed(2)}
-                            </td>
-                            <td className="py-3 text-sm text-text-secondary">{trade.reason}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+              <GlassCard header={<h3 className="text-base font-semibold text-text-primary">交易明细</h3>}>
+                <GlassTable
+                  columns={tradeColumns}
+                  data={mockTrades}
+                  rowKey="id"
+                  compact
+                />
               </GlassCard>
             </>
           ) : (
@@ -435,6 +490,45 @@ export const BacktestPage: React.FC = () => {
               </p>
             </GlassCard>
           )}
+
+          <GlassCard header={<h3 className="text-base font-semibold text-text-primary">历史回测</h3>}>
+            <div className="space-y-2">
+              {historyJobs.map((job) => {
+                const status = statusConfig[job.status] || statusConfig.pending
+                const StatusIcon = status.icon
+                return (
+                  <div
+                    key={job.id}
+                    className="flex items-center justify-between p-3 rounded-glass-sm hover:bg-glass-bg-hover/30 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <StatusIcon className={cn('w-4 h-4', status.color, job.status === 'running' && 'animate-spin')} />
+                      <div>
+                        <p className="text-sm font-medium text-text-primary">{job.strategyName}</p>
+                        <p className="text-xs text-text-tertiary">
+                          {formatDate(job.startDate)} ~ {formatDate(job.endDate)}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {job.status === 'running' && (
+                        <div className="w-24 h-1.5 bg-glass-bg-hover rounded-full overflow-hidden">
+                          <div className="h-full bg-accent rounded-full transition-all" style={{ width: `${job.progress}%` }} />
+                        </div>
+                      )}
+                      <GlassBadge
+                        variant={job.status === 'completed' ? 'up' : job.status === 'failed' ? 'down' : 'accent'}
+                        size="sm"
+                      >
+                        {status.label}
+                      </GlassBadge>
+                      <span className="text-xs text-text-tertiary">{formatDate(job.createdAt)}</span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </GlassCard>
         </div>
       </div>
     </div>

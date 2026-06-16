@@ -1,4 +1,4 @@
-.PHONY: up down build logs migrate test shell frontend
+.PHONY: up down build logs migrate test
 
 up:
 	docker-compose up -d

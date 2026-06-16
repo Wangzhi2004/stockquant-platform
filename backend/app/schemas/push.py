@@ -10,6 +10,9 @@ class PushConfigBase(BaseModel):
     channel: str
     config: Optional[Dict] = {}
     is_active: bool = True
+    silent_start: Optional[str] = None  # "23:00"
+    silent_end: Optional[str] = None    # "09:00"
+    frequency_limit_minutes: Optional[int] = None  # 5
 
 
 class PushConfigCreate(PushConfigBase):
@@ -22,6 +25,9 @@ class PushConfigUpdate(BaseModel):
     channel: Optional[str] = None
     config: Optional[Dict] = None
     is_active: Optional[bool] = None
+    silent_start: Optional[str] = None
+    silent_end: Optional[str] = None
+    frequency_limit_minutes: Optional[int] = None
 
 
 class PushConfigResponse(PushConfigBase):

@@ -3,29 +3,22 @@ from functools import lru_cache
 
 
 class Settings(BaseSettings):
-    # App
     APP_NAME: str = "StockQuant Platform"
     DEBUG: bool = False
     
-    # Database
-    DATABASE_URL: str = "sqlite:///./stockquant.db"
+    DATABASE_URL: str = "postgresql://stockquant:changeme@localhost:5432/stockquant"
     
-    # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
     
-    # Security
     SECRET_KEY: str = "your-super-secret-key"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7
     
-    # Data Sources
     AKSHARE_TOKEN: str = ""
     TUSHARE_TOKEN: str = ""
     
-    # AI
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_API_URL: str = "https://api.deepseek.com/v1/chat/completions"
     
-    # Push
     WECHAT_WEBHOOK: str = ""
     DINGTALK_WEBHOOK: str = ""
     FEISHU_WEBHOOK: str = ""

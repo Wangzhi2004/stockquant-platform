@@ -7,7 +7,8 @@ from app.models.user import User
 from app.schemas.portfolio import (
     PortfolioCreate, PortfolioUpdate, PortfolioResponse, PortfolioDetailResponse,
     HoldingCreate, HoldingUpdate, HoldingResponse,
-    TransactionCreate, TransactionResponse
+    TransactionCreate, TransactionResponse,
+    HoldingImportRequest, HoldingImportResponse,
 )
 from app.services.portfolio_service import PortfolioService
 from app.api.deps import get_current_user
@@ -22,19 +23,7 @@ async def list_portfolios(
 ):
     service = PortfolioService(db)
     portfolios = service.get_portfolios(current_user.id)
-
-    result = []
-    for portfolio in portfolios:
-        stats = service.calculate_portfolio_stats(portfolio.id, current_user.id)
-        portfolio_data = PortfolioResponse.model_validate(portfolio)
-        portfolio_data.total_market_value = stats["total_market_value"]
-        portfolio_data.total_cost = stats["total_cost"]
-        portfolio_data.total_profit_loss = stats["total_profit_loss"]
-        portfolio_data.total_profit_loss_pct = stats["total_profit_loss_pct"]
-        portfolio_data.holdings_count = stats["holdings_count"]
-        result.append(portfolio_data)
-
-    return result
+    return [PortfolioResponse.model_validate(p) for p in portfolios]
 
 
 @router.post("", response_model=PortfolioResponse, status_code=201)
@@ -149,3 +138,15 @@ async def add_transaction(
     service = PortfolioService(db)
     transaction = service.add_transaction(portfolio_id, current_user.id, data)
     return transaction
+
+
+@router.post("/{portfolio_id}/holdings/import", response_model=HoldingImportResponse)
+async def import_holdings(
+    portfolio_id: UUID,
+    data: HoldingImportRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    service = PortfolioService(db)
+    result = service.import_holdings(portfolio_id, current_user.id, data.holdings)
+    return result
